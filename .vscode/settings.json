@@ -1,0 +1,14 @@
+{
+    "files.associations": {
+        "*.json": "json",
+        "defs.h": "c",
+        "unistd.h": "c",
+        "string.h": "c",
+        "cstdlib": "c",
+        "errno.h": "c",
+        "stdint.h": "c",
+        "lexer.h": "c",
+        "parser.h": "c",
+        "symbol.h": "c"
+    }
+}
