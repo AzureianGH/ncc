@@ -12,11 +12,12 @@ typedef enum {
     TOKEN_SHORT,
     TOKEN_UNSIGNED,
     TOKEN_CHAR,
-    TOKEN_VOID,
-    TOKEN_FAR,
+    TOKEN_VOID,    TOKEN_FAR,
     TOKEN_ASM,
     TOKEN_STACKFRAME,
     TOKEN_FARCALLED,
+    TOKEN_ATTRIBUTE,     // __attribute__
+    TOKEN_NAKED,         // naked
     TOKEN_IF,
     TOKEN_ELSE,
     TOKEN_WHILE,
@@ -28,8 +29,7 @@ typedef enum {
     TOKEN_NUMBER,
     TOKEN_STRING,
     TOKEN_CHAR_LITERAL,
-    
-    // Operators
+      // Operators
     TOKEN_PLUS,       // +
     TOKEN_MINUS,      // -
     TOKEN_STAR,       // *
@@ -42,6 +42,8 @@ typedef enum {
     TOKEN_LTE,        // <=
     TOKEN_GT,         // >
     TOKEN_GTE,        // >=
+    TOKEN_LEFT_SHIFT, // <<
+    TOKEN_RIGHT_SHIFT,// >>
     TOKEN_AND,        // &&
     TOKEN_OR,         // ||
     TOKEN_NOT,        // !
@@ -52,7 +54,14 @@ typedef enum {
     TOKEN_BITWISE_NOT,// ~
     TOKEN_XOR,        // ^
     TOKEN_ARROW,      // ->
-    
+
+    // Compound assignment operators
+    TOKEN_PLUS_ASSIGN,  // +=
+    TOKEN_MINUS_ASSIGN, // -=
+    TOKEN_MUL_ASSIGN,   // *=
+    TOKEN_DIV_ASSIGN,   // /=
+    TOKEN_MOD_ASSIGN,   // %=  
+
     // Punctuation
     TOKEN_LBRACE,     // {
     TOKEN_RBRACE,     // }
@@ -74,6 +83,7 @@ typedef struct {
     char* value;
     int line;   // Line number for error reporting
     int column; // Column number for error reporting
+    int pos;    // Position in source buffer for error reporting
 } Token;
 
 // Initialize lexer with source code

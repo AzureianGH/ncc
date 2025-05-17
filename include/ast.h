@@ -44,23 +44,34 @@ typedef enum {
     OP_DIV,  // /
     OP_MOD,  // %
     OP_EQ,   // ==
-    OP_NEQ,  // !=
+    OP_NEQ,  // !=    
     OP_LT,   // <
     OP_LTE,  // <=
     OP_GT,   // >
     OP_GTE,  // >=
     OP_BITWISE_AND, // &
     OP_BITWISE_OR,  // |
-    OP_BITWISE_XOR  // ^
+    OP_BITWISE_XOR, // ^
+    OP_LEFT_SHIFT,  // <<
+    OP_RIGHT_SHIFT, // >>
+    OP_PLUS_ASSIGN, // +=
+    OP_MINUS_ASSIGN,// -=
+    OP_MUL_ASSIGN,  // *=
+    OP_DIV_ASSIGN,  // /=
+    OP_MOD_ASSIGN   // %=
 } OperatorType;
 
 // Unary operators
 typedef enum {
-    UNARY_ADDRESS_OF,   // &x
-    UNARY_DEREFERENCE,  // *x
-    UNARY_NEGATE,       // -x
-    UNARY_NOT,          // !x
-    UNARY_BITWISE_NOT   // ~x
+    UNARY_ADDRESS_OF,    // &x
+    UNARY_DEREFERENCE,   // *x
+    UNARY_NEGATE,        // -x
+    UNARY_NOT,           // !x
+    UNARY_BITWISE_NOT,   // ~x
+    PREFIX_INCREMENT,    // ++x
+    PREFIX_DECREMENT,    // --x
+    POSTFIX_INCREMENT,   // x++
+    POSTFIX_DECREMENT    // x--
 } UnaryOperatorType;
 
 // Forward declaration
@@ -83,6 +94,7 @@ typedef struct {
     int param_count;
     int is_stackframe;  // Uses stackframe with register preservation
     int is_far;        // Is a far function
+    int is_naked;      // Function is naked (no prologue/epilogue)
 } FunctionInfo;
 
 // AST Node structure
@@ -165,13 +177,17 @@ typedef struct ASTNode {
             struct ASTNode* condition; // Loop condition
             struct ASTNode* body;      // Loop body
         } while_loop;
-        
-        // For if statements
+          // For if statements
         struct {
             struct ASTNode* condition; // If condition
             struct ASTNode* if_body;   // If body (true branch)
             struct ASTNode* else_body; // Else body (false branch), NULL if no else
         } if_stmt;
+        
+        // For assignment statements
+        struct {
+            OperatorType op;  // The operation to perform (OP_PLUS_ASSIGN, etc.)
+        } assignment;
     };
 }ASTNode;
 

@@ -1,7 +1,9 @@
 #include "parser.h"
 #include "lexer.h"
 #include "ast.h"
-#include "error_handler.h"
+#include "error_manager.h"
+#include "token_debug.h"
+#include "attributes.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -11,16 +13,24 @@ void initParser() {
     // Nothing to initialize, just start parsing from the first token
 }
 
-#include "token_debug.h"
-
 // Helper function to expect and consume a token
 void expect(TokenType type) {
     if (!consume(type)) {
         Token token = getCurrentToken();
-        fprintf(stderr, "Syntax error: Expected %s but got %s\n", 
-                getTokenName(type), getTokenName(token.type));
+        reportError(token.pos, "Expected %s but got %s", 
+                  getTokenName(type), getTokenName(token.type));
         exit(1);
     }
+}
+
+// Check if a token represents a type name
+int isTypeName(Token token) {
+    return token.type == TOKEN_INT || 
+           token.type == TOKEN_SHORT || 
+           token.type == TOKEN_CHAR || 
+           token.type == TOKEN_VOID || 
+           token.type == TOKEN_UNSIGNED ||
+           token.type == TOKEN_FAR;
 }
 
 // Parse a type (int, short, char, etc.)
@@ -58,12 +68,12 @@ TypeInfo parseType() {
         typeInfo.type = isUnsigned ? TYPE_UNSIGNED_SHORT : TYPE_SHORT;
     } else if (tokenIs(TOKEN_CHAR)) {
         consume(TOKEN_CHAR);
-        typeInfo.type = isUnsigned ? TYPE_UNSIGNED_CHAR : TYPE_CHAR;
-    } else if (tokenIs(TOKEN_VOID)) {
+        typeInfo.type = isUnsigned ? TYPE_UNSIGNED_CHAR : TYPE_CHAR;    } else if (tokenIs(TOKEN_VOID)) {
         consume(TOKEN_VOID);
         typeInfo.type = TYPE_VOID;
     } else {
-        fprintf(stderr, "Syntax error: Expected type specifier\n");
+        Token token = getCurrentToken();
+        reportError(token.pos, "Expected type specifier");
         exit(1);
     }
     
@@ -108,12 +118,22 @@ ASTNode* parseProgram() {
 
 // Parse a declaration (variable or function)
 ASTNode* parseDeclaration() {
+    // Check for function attributes before the type
+    // This is used for cases like __attribute__((naked)) void func()
+    FunctionInfo tempFuncInfo = {0};
+    int hasAttributes = 0;
+    
+    if (tokenIs(TOKEN_ATTRIBUTE)) {
+        parseFunctionAttributes(&tempFuncInfo);
+        hasAttributes = 1;
+    }
+    
     // Parse the type
     TypeInfo typeInfo = parseType();
-    
-    // Get the identifier name
+      // Get the identifier name
     if (!tokenIs(TOKEN_IDENTIFIER)) {
-        fprintf(stderr, "Syntax error: Expected identifier\n");
+        Token token = getCurrentToken();
+        reportError(token.pos, "Expected identifier after type specifier");
         exit(1);
     }
     
@@ -123,7 +143,13 @@ ASTNode* parseDeclaration() {
     // Check if this is a function definition
     if (tokenIs(TOKEN_LPAREN)) {
         // This is a function
-        return parseFunctionDefinition(name, typeInfo);
+        ASTNode* fnNode = parseFunctionDefinition(name, typeInfo);
+        if (hasAttributes) {
+            fnNode->function.info.is_naked = tempFuncInfo.is_naked;
+            fnNode->function.info.is_stackframe = tempFuncInfo.is_stackframe;
+            fnNode->function.info.is_far = tempFuncInfo.is_far;
+        }
+        return fnNode;
     } else {
         // This is a variable declaration
         return parseVariableDeclaration(name, typeInfo);
@@ -133,9 +159,9 @@ ASTNode* parseDeclaration() {
 // Parse a function parameter
 ASTNode* parseParameter() {
     TypeInfo typeInfo = parseType();
-    
-    if (!tokenIs(TOKEN_IDENTIFIER)) {
-        fprintf(stderr, "Syntax error: Expected parameter name\n");
+      if (!tokenIs(TOKEN_IDENTIFIER)) {
+        Token token = getCurrentToken();
+        reportError(token.pos, "Expected parameter name");
         exit(1);
     }
     
@@ -158,7 +184,13 @@ ASTNode* parseFunctionDefinition(char* name, TypeInfo returnType) {
     // Transfer function attributes from the return type
     node->function.info.is_stackframe = returnType.is_stackframe;
     node->function.info.is_far = returnType.is_far;
+    node->function.info.is_naked = 0; // Initialize naked flag
+    node->function.info.is_naked = 0;  // Initialize naked flag
     
+    // Allow __attribute__ between return type and parameter list
+    if (tokenIs(TOKEN_ATTRIBUTE)) {
+        parseFunctionAttributes(&node->function.info);
+    }
     // Parse parameters
     expect(TOKEN_LPAREN);
     
@@ -184,6 +216,9 @@ ASTNode* parseFunctionDefinition(char* name, TypeInfo returnType) {
     }
     
     expect(TOKEN_RPAREN);
+    
+    // Parse function attributes if present
+    parseFunctionAttributes(&node->function.info);
     
     // Parse function body
     node->function.body = parseBlock();
@@ -217,7 +252,46 @@ ASTNode* parseVariableDeclaration(char* name, TypeInfo typeInfo) {
     // Check for initializer
     if (tokenIs(TOKEN_ASSIGN)) {
         consume(TOKEN_ASSIGN);
-        node->declaration.initializer = parseExpression();
+        
+        // Check for array initializer with braces: int arr[5] = {1, 2, 3, 4, 5};
+        if (node->declaration.type_info.is_array && tokenIs(TOKEN_LBRACE)) {
+            consume(TOKEN_LBRACE);
+            
+            // Create a linked list of initializer expressions
+            ASTNode* initializers = NULL;
+            ASTNode* lastInitializer = NULL;
+            int initCount = 0;
+            
+            // Parse comma-separated expressions until closing brace
+            if (!tokenIs(TOKEN_RBRACE)) {
+                // First initializer
+                initializers = parseExpression();
+                lastInitializer = initializers;
+                initCount = 1;
+                
+                // Parse additional initializers
+                while (tokenIs(TOKEN_COMMA)) {
+                    consume(TOKEN_COMMA);
+                    ASTNode* expr = parseExpression();
+                    lastInitializer->next = expr;
+                    lastInitializer = expr;
+                    initCount++;
+                }
+            }
+            
+            expect(TOKEN_RBRACE);
+            
+            // Store the list of initializers
+            node->declaration.initializer = initializers;
+            
+            // If array size wasn't specified, use the number of initializers
+            if (node->declaration.type_info.array_size == 0) {
+                node->declaration.type_info.array_size = initCount;
+            }
+        } else {
+            // Regular single-value initializer
+            node->declaration.initializer = parseExpression();
+        }
     }
     
     expect(TOKEN_SEMICOLON);
@@ -255,12 +329,11 @@ ASTNode* parseInlineAssembly() {
     ASTNode* node = createNode(NODE_ASM);
 
     // Expect an opening parenthesis for inline assembly syntax: __asm("...")
-    expect(TOKEN_LPAREN);
-
-    if (!tokenIs(TOKEN_STRING)) {
-        fprintf(stderr, "Syntax error: Expected string literal in __asm\n");
+    expect(TOKEN_LPAREN);    if (!tokenIs(TOKEN_STRING)) {
+        Token token = getCurrentToken();
+        reportError(token.pos, "Expected string literal in __asm statement");
         exit(1);
-    }    node->asm_stmt.code = strdup(getCurrentToken().value);
+    }node->asm_stmt.code = strdup(getCurrentToken().value);
     consume(TOKEN_STRING);
 
     expect(TOKEN_RPAREN);
@@ -372,7 +445,7 @@ ASTNode* parseExpression() {
 
 // Parse a relational expression
 ASTNode* parseRelationalExpression() {
-    ASTNode* left = parseAdditiveExpression();
+    ASTNode* left = parseBitwiseExpression();
     
     // Handle relational operators: <, >, <=, >=, ==, !=
     while (tokenIs(TOKEN_LT) || tokenIs(TOKEN_GT) || 
@@ -417,16 +490,35 @@ ASTNode* parseRelationalExpression() {
 ASTNode* parseAssignmentExpression() {
     ASTNode* left = parseRelationalExpression();
     
-    if (tokenIs(TOKEN_ASSIGN)) {
-        consume(TOKEN_ASSIGN);
+    if (tokenIs(TOKEN_ASSIGN) || tokenIs(TOKEN_PLUS_ASSIGN) || tokenIs(TOKEN_MINUS_ASSIGN) ||
+        tokenIs(TOKEN_MUL_ASSIGN) || tokenIs(TOKEN_DIV_ASSIGN) || tokenIs(TOKEN_MOD_ASSIGN)) {
         
         ASTNode* node = createNode(NODE_ASSIGNMENT);
+        // Determine assignment operator
+        if (tokenIs(TOKEN_PLUS_ASSIGN)) {
+            node->assignment.op = OP_PLUS_ASSIGN;
+            consume(TOKEN_PLUS_ASSIGN);
+        } else if (tokenIs(TOKEN_MINUS_ASSIGN)) {
+            node->assignment.op = OP_MINUS_ASSIGN;
+            consume(TOKEN_MINUS_ASSIGN);
+        } else if (tokenIs(TOKEN_MUL_ASSIGN)) {
+            node->assignment.op = OP_MUL_ASSIGN;
+            consume(TOKEN_MUL_ASSIGN);
+        } else if (tokenIs(TOKEN_DIV_ASSIGN)) {
+            node->assignment.op = OP_DIV_ASSIGN;
+            consume(TOKEN_DIV_ASSIGN);
+        } else if (tokenIs(TOKEN_MOD_ASSIGN)) {
+            node->assignment.op = OP_MOD_ASSIGN;
+            consume(TOKEN_MOD_ASSIGN);
+        } else {
+            node->assignment.op = 0; // simple assignment
+            consume(TOKEN_ASSIGN);
+        }
         node->left = left;
         node->right = parseAssignmentExpression();
-        
         return node;
     }
-    
+
     return left;
 }
 
@@ -474,6 +566,67 @@ ASTNode* parseMultiplicativeExpression() {
         }
         
         ASTNode* right = parsePrimaryExpression();
+        
+        ASTNode* node = createNode(NODE_BINARY_OP);
+        node->operation.op = op;
+        node->left = left;
+        node->right = right;
+        
+        left = node;
+    }
+    
+    return left;
+}
+
+// Parse expressions with bitwise operators
+ASTNode* parseBitwiseExpression() {
+    ASTNode* left = parseShiftExpression();
+    
+    // Handle bitwise operators: &, |, ^
+    while (tokenIs(TOKEN_AMPERSAND) || tokenIs(TOKEN_PIPE) || tokenIs(TOKEN_XOR)) {
+        OperatorType op;
+        
+        if (tokenIs(TOKEN_AMPERSAND)) {
+            consume(TOKEN_AMPERSAND);
+            op = OP_BITWISE_AND;
+        } else if (tokenIs(TOKEN_PIPE)) {
+            consume(TOKEN_PIPE);
+            op = OP_BITWISE_OR;
+        } else {
+            consume(TOKEN_XOR);
+            op = OP_BITWISE_XOR;
+        }
+        
+        ASTNode* right = parseShiftExpression();
+        
+        ASTNode* node = createNode(NODE_BINARY_OP);
+        node->operation.op = op;
+        node->left = left;
+        node->right = right;
+        
+        left = node;
+    }
+    
+    return left;
+}
+
+// Parse expressions with shift operators
+ASTNode* parseShiftExpression() {
+    ASTNode* left = parseAdditiveExpression();
+    
+    // Handle shift operators: <<, >>
+    while (tokenIs(TOKEN_LEFT_SHIFT) || tokenIs(TOKEN_RIGHT_SHIFT)) {
+        OperatorType op;
+        
+        if (tokenIs(TOKEN_LEFT_SHIFT)) {
+            consume(TOKEN_LEFT_SHIFT);
+            op = OP_LEFT_SHIFT;
+        } else {
+            consume(TOKEN_RIGHT_SHIFT);
+            op = OP_RIGHT_SHIFT;
+        }
+        
+        ASTNode* right = parseAdditiveExpression();
         
         ASTNode* node = createNode(NODE_BINARY_OP);
         node->operation.op = op;
@@ -551,8 +704,8 @@ ASTNode* parsePrimaryExpression() {
         if (tokenIs(TOKEN_COLON)) {
             consume(TOKEN_COLON);
             
-            if (!tokenIs(TOKEN_NUMBER)) {
-                fprintf(stderr, "Syntax error: Expected offset after segment in far pointer\n");
+            if (!tokenIs(TOKEN_NUMBER)) {                Token token = getCurrentToken();
+                reportError(token.pos, "Expected offset value after segment in far pointer");
                 exit(1);
             }
             
@@ -574,12 +727,29 @@ ASTNode* parsePrimaryExpression() {
             node->literal.segment = segment;
             node->literal.offset = offset;
         }
+          return node;
+    } else if (tokenIs(TOKEN_CHAR_LITERAL)) {
+        ASTNode* node = createNode(NODE_LITERAL);
+        node->literal.data_type = TYPE_INT; // Treat chars as integers
         
+        // Get the character value and convert to its ASCII/hex value
+        char ch = getCurrentToken().value[0];
+        node->literal.int_value = (unsigned char)ch; // ASCII value of the character
+        
+        consume(TOKEN_CHAR_LITERAL);
         return node;
     } else if (tokenIs(TOKEN_STRING)) {
         ASTNode* node = createNode(NODE_LITERAL);
         node->literal.data_type = TYPE_CHAR;
-        node->literal.string_value = strdup(getCurrentToken().value);
+        
+        // Store the string value including quotes
+        const char* tokenValue = getCurrentToken().value;
+        if (tokenValue) {
+            node->literal.string_value = strdup(tokenValue);
+        } else {
+            node->literal.string_value = strdup(""); // Empty string as fallback
+        }
+        
         consume(TOKEN_STRING);
         return node;
     } else if (tokenIs(TOKEN_LPAREN)) {
@@ -587,8 +757,8 @@ ASTNode* parsePrimaryExpression() {
         ASTNode* expr = parseExpression();
         expect(TOKEN_RPAREN);
         return expr;
-    } else {
-        fprintf(stderr, "Syntax error: Expected expression\n");
+    } else {        Token token = getCurrentToken();
+        reportError(token.pos, "Expected expression");
         exit(1);
         return NULL;  // To avoid compiler warning
     }

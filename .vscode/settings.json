@@ -9,6 +9,9 @@
         "stdint.h": "c",
         "lexer.h": "c",
         "parser.h": "c",
-        "symbol.h": "c"
+        "symbol.h": "c",
+        "stdio.h": "c",
+        "bootloader.h": "c",
+        "codegen.h": "c"
     }
 }

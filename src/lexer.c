@@ -1,5 +1,5 @@
 #include "lexer.h"
-#include "error_handler.h"
+#include "error_manager.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -85,6 +85,8 @@ static int isKeyword(const char* str) {
     if (strcmp(str, "__asm") == 0) return TOKEN_ASM;
     if (strcmp(str, "__stackframe") == 0) return TOKEN_STACKFRAME;
     if (strcmp(str, "__farcalled") == 0) return TOKEN_FARCALLED;
+    if (strcmp(str, "__attribute__") == 0) return TOKEN_ATTRIBUTE;
+    if (strcmp(str, "naked") == 0) return TOKEN_NAKED;
     if (strcmp(str, "if") == 0) return TOKEN_IF;
     if (strcmp(str, "else") == 0) return TOKEN_ELSE;
     if (strcmp(str, "while") == 0) return TOKEN_WHILE;
@@ -99,6 +101,7 @@ Token getNextToken() {
     token.value = NULL;
     token.line = line;
     token.column = column;
+    token.pos = position;  // Store current position in source
 
     skipWhitespace();
 
@@ -159,10 +162,10 @@ Token getNextToken() {
         token.column = startColumn;
         return token;
     }
-    
-    // Handle string literals
+      // Handle string literals
     if (source[position] == '"') {
         int startColumn = column;
+        int startPos = position;
         position++;  // Skip opening quote
         column++;
         
@@ -183,51 +186,78 @@ Token getNextToken() {
         strncpy(token.value, &source[start], length);
         token.value[length] = '\0';
         token.type = TOKEN_STRING;
-          if (source[position] == '"') {
+        
+        if (source[position] == '"') {
             position++;  // Skip closing quote
             column++;
         } else {
-            print_error(ERROR_SYNTAX, "input", line, column, 
-                       "unterminated string literal");
-            show_error_location(source, line, startColumn, position - start);
+            reportError(startPos, "Unterminated string literal");
             exit(1);
         }
         
         token.line = line;
         token.column = startColumn;
         return token;
-    }
-      // Handle character literals
+    }    // Handle character literals
     if (source[position] == '\'') {
         int startColumn = column;
-        size_t start = position;
+        int startPos = position;
         position++;  // Skip opening quote
         column++;
         
+        char charValue = 0;
+        
         // Handle escape sequences
-        if (source[position] == '\\' && source[position + 1]) {
-            position += 2;
-            column += 2;
-        } else if (source[position] && source[position] != '\'' && source[position] != '\n') {
+        if (source[position] == '\\') {
             position++;
-            column++;        } else {
-            print_error(ERROR_SYNTAX, "input", line, column, 
-                       "invalid character literal");
-            show_error_location(source, line, column, 1);
+            column++;
+            
+            // Process escape sequences
+            switch (source[position]) {
+                case 'n':  charValue = '\n'; break;
+                case 't':  charValue = '\t'; break;
+                case 'r':  charValue = '\r'; break;
+                case '0':  charValue = '\0'; break;
+                case '\\': charValue = '\\'; break;
+                case '\'': charValue = '\''; break;
+                case '"':  charValue = '"';  break;
+                case 'x': {
+                    // Handle hex escape sequence \xHH
+                    if (isxdigit(source[position + 1]) && isxdigit(source[position + 2])) {
+                        char hex[3] = {source[position + 1], source[position + 2], '\0'};
+                        charValue = (char)strtol(hex, NULL, 16);
+                        position += 2;
+                        column += 2;
+                    } else {
+                        reportError(startPos, "Invalid hex escape sequence, expected \\xHH format");
+                        exit(1);
+                    }
+                    break;
+                }
+                default:
+                    charValue = source[position];
+            }
+            position++;
+            column++;
+        } else if (source[position] && source[position] != '\'' && source[position] != '\n') {
+            charValue = source[position];
+            position++;
+            column++;
+        } else {
+            reportError(startPos, "Invalid character literal");
             exit(1);
         }
         
         token.type = TOKEN_CHAR_LITERAL;
         token.value = malloc(2);
-        token.value[0] = source[position - 1];
+        token.value[0] = charValue;
         token.value[1] = '\0';
-          if (source[position] == '\'') {
+        
+        if (source[position] == '\'') {
             position++;  // Skip closing quote
             column++;
         } else {
-            print_error(ERROR_SYNTAX, "input", line, column, 
-                       "unterminated character literal");
-            show_error_location(source, line, startColumn, position - start);
+            reportError(startPos, "Unterminated character literal");
             exit(1);
         }
         
@@ -298,47 +328,68 @@ Token getNextToken() {
             } else {
                 token.type = TOKEN_ASSIGN;
             }
-            break;
-        case '+':
+            break;        case '+':
             position++;
             column++;
             if (source[position] == '=') {
-                token.type = TOKEN_ASSIGN;  // Simplified to just assignment
+                token.type = TOKEN_PLUS_ASSIGN;  // Now proper += token
+                position++;
+                column++;
+            } else if (source[position] == '+') {
+                token.type = TOKEN_INCREMENT;  // ++ operator
                 position++;
                 column++;
             } else {
                 token.type = TOKEN_PLUS;
             }
-            break;
-        case '-':
+            break;        case '-':
             position++;
             column++;
             if (source[position] == '=') {
-                token.type = TOKEN_ASSIGN;  // Simplified to just assignment
+                token.type = TOKEN_MINUS_ASSIGN;  // Now proper -= token
                 position++;
                 column++;
             } else if (source[position] == '>') {
                 token.type = TOKEN_ARROW;
                 position++;
                 column++;
+            } else if (source[position] == '-') {
+                token.type = TOKEN_DECREMENT;  // -- operator
+                position++;
+                column++;
             } else {
                 token.type = TOKEN_MINUS;
             }
-            break;
-        case '*':
-            token.type = TOKEN_STAR;
+            break;case '*':
             position++;
             column++;
-            break;
-        case '/':
-            token.type = TOKEN_SLASH;
+            if (source[position] == '=') {
+                token.type = TOKEN_MUL_ASSIGN;  // *= operator
+                position++;
+                column++;
+            } else {
+                token.type = TOKEN_STAR;
+            }
+            break;        case '/':
             position++;
             column++;
-            break;
-        case '%':
-            token.type = TOKEN_PERCENT;
+            if (source[position] == '=') {
+                token.type = TOKEN_DIV_ASSIGN;  // /= operator
+                position++;
+                column++;
+            } else {
+                token.type = TOKEN_SLASH;
+            }
+            break;        case '%':
             position++;
             column++;
+            if (source[position] == '=') {
+                token.type = TOKEN_MOD_ASSIGN;  // %= operator
+                position++;
+                column++;
+            } else {
+                token.type = TOKEN_PERCENT;
+            }
             break;
         case '!':
             position++;
@@ -349,23 +400,29 @@ Token getNextToken() {
             } else {
                 token.type = TOKEN_NOT;
             }
-            break;
-        case '<':
+            break;        case '<':
             position++;
             column++;
             if (source[position] == '=') {
                 token.type = TOKEN_LTE;
                 position++;
                 column++;
+            } else if (source[position] == '<') {
+                token.type = TOKEN_LEFT_SHIFT;
+                position++;
+                column++;
             } else {
                 token.type = TOKEN_LT;
             }
-            break;
-        case '>':
+            break;        case '>':
             position++;
             column++;
             if (source[position] == '=') {
                 token.type = TOKEN_GTE;
+                position++;
+                column++;
+            } else if (source[position] == '>') {
+                token.type = TOKEN_RIGHT_SHIFT;
                 position++;
                 column++;
             } else {
@@ -393,12 +450,26 @@ Token getNextToken() {
             } else {
                 token.type = TOKEN_PIPE;
             }
-            break;        default:
-            print_error(ERROR_SYNTAX, "input", line, column, 
-                       "unexpected character '%c'", source[position]);
-            show_error_location(source, line, column, 1);
+            break;
+            
+        case '^':
+            position++;
+            column++;
+            token.type = TOKEN_XOR;
+            break;
+            
+        case '~':
+            position++;
+            column++;
+            token.type = TOKEN_BITWISE_NOT;
+            break;
+            
+        default:
+            int errorPos = position;
+            char errorChar = source[position];
             position++;  // Skip the unrecognized character
             column++;
+            reportWarning(errorPos, "Unexpected character '%c'", errorChar);
             return getNextToken();  // Try again with the next character
     }
     
@@ -459,8 +530,10 @@ char* consumeAndGetValue(TokenType type) {
 
 // Report a syntax error
 void syntaxError(const char* message) {
-    print_error(ERROR_SYNTAX, "input", currentToken.line, currentToken.column, "%s", message);
-    show_error_location(source, currentToken.line, currentToken.column, 
-                       currentToken.value ? strlen(currentToken.value) : 1);
+    // Calculate position in source buffer for error reporting
+    int position = currentToken.pos;
+    
+    // Use the error manager to report the error
+    reportError(position, "Syntax error: %s", message);
     exit(1);
 }

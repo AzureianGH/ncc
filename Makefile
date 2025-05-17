@@ -31,18 +31,10 @@ clean:
 	rm -rf $(OBJ_DIR)/* $(BIN_DIR)/*
 
 # Create test directory and sample test file
-test:
-	@echo "Test unit 0: minimal.c         1/5 20%"
-	$(TARGET) test/minimal.c -o test/minimal.asm
-	@echo "Test unit 1: simple_for.c      2/5 40%"
-	$(TARGET) test/simple_for.c -o test/simple_for.asm
-	@echo "Test unit 2: simple_ptr.c      3/5 60%"
-	$(TARGET) test/simple_ptr.c -o test/simple_ptr.asm
-	@echo "Test unit 3: for_test.c        4/5 80%"
-	$(TARGET) test/for_test.c -o test/for_test.asm
-	@echo "Test unit 4: loops_and_strings.c 5/5 100%"
-	$(TARGET) test/loops_and_strings.c -o test/loops_and_strings.asm
-	@echo "All unit tests successful."
+test_os:
+	bin\ncc test\bootloader.c -o test\bootloader.asm
+	nasm -f bin .\test\bootloader.asm -o test\bootloader.bin
+	qemu-system-x86_64 -drive format=raw,file=test\bootloader.bin
 
 # Build a quiet version of the compiler (less verbose output)
 quiet:

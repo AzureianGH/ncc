@@ -4,8 +4,8 @@
 #include "ast.h"
 #include "string_literals.h"
 
-// Initialize code generator
-void initCodeGen(const char* outputFilename);
+// Initialize code generator with optional origin displacement
+void initCodeGen(const char* outputFilename, unsigned int orgAddress);
 
 // Close code generator
 void finalizeCodeGen();
@@ -21,6 +21,9 @@ void generateGlobalDeclaration(ASTNode* node);
 
 // Generate code for a local variable declaration
 void generateVariableDeclaration(ASTNode* node);
+
+// Generate code for an array with initializers
+void generateArrayWithInitializers(ASTNode* node);
 
 // Generate code for a block of statements
 void generateBlock(ASTNode* node);

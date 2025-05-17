@@ -85,4 +85,10 @@ TypeInfo parseType();
 // Expect a specific token type
 void expect(TokenType type);
 
+// Parse expressions with bitwise operators
+ASTNode* parseBitwiseExpression();
+
+// Parse expressions with shift operators
+ASTNode* parseShiftExpression();
+
 #endif // PARSER_H

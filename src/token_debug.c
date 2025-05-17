@@ -49,6 +49,12 @@ const char* getTokenName(TokenType type) {
         case TOKEN_BITWISE_NOT: return "TOKEN_BITWISE_NOT (~)";
         case TOKEN_XOR: return "TOKEN_XOR (^)";
         case TOKEN_ARROW: return "TOKEN_ARROW (->)";
+        // Compound assignment operators
+        case TOKEN_PLUS_ASSIGN: return "TOKEN_PLUS_ASSIGN (+=)";
+        case TOKEN_MINUS_ASSIGN: return "TOKEN_MINUS_ASSIGN (-=)";
+        case TOKEN_MUL_ASSIGN: return "TOKEN_MUL_ASSIGN (*=)";
+        case TOKEN_DIV_ASSIGN: return "TOKEN_DIV_ASSIGN (/=)";
+        case TOKEN_MOD_ASSIGN: return "TOKEN_MOD_ASSIGN (%=)";
         
         // Punctuation
         case TOKEN_LBRACE: return "TOKEN_LBRACE ({)";

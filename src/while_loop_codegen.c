@@ -21,8 +21,7 @@ void generateWhileLoop(ASTNode* node) {
     // Start with condition check
     fprintf(asmFile, "    ; While loop\n");
     fprintf(asmFile, "%s:\n", condLabel);
-    
-    // Generate condition evaluation
+      // Generate condition evaluation
     if (node->while_loop.condition) {
         generateExpression(node->while_loop.condition);
         
@@ -34,6 +33,8 @@ void generateWhileLoop(ASTNode* node) {
     // Generate loop body
     if (node->while_loop.body) {
         generateStatement(node->while_loop.body);
+    } else {
+        fprintf(asmFile, "    ; Warning: Empty loop body\n");
     }
     
     // Jump back to condition
