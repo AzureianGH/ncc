@@ -16,8 +16,11 @@
 [[naked]] void main()
 {
     clearScreen();
-
-    if (sizeof(int) == 2) writeString("Hello, World!\r\n");
+    char mes[] = "Hello";
+    char pain[] = {'H',  'l', 'l', 'o', '\0'};
+    
+    if (sizeof("Hello") == 6 && sizeof(mes) == 6 || sizeof(pain) == 6)
+        writeString("Hello, World!\r\n");
     
 
     haltForever();

@@ -11,4 +11,3 @@
 
 #define uint8_t unsigned char
 #define uint16_t unsigned int
-

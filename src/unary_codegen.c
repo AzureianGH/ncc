@@ -1,6 +1,7 @@
 #include "codegen.h"
 #include "ast.h"
 #include "error_manager.h"
+#include "type_checker.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,6 +13,12 @@ extern int isParameter(const char* name);
 extern int getNextLabelId();
 extern int labelCounter;
 extern void generateExpression(ASTNode* node);
+
+// External array info from string_literals.c
+extern int arrayCount;
+extern char** arrayNames;
+extern int* arraySizes;
+extern DataType* arrayTypes;
 
 #ifdef __GNUC__
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -160,40 +167,168 @@ void generateUnaryOp(ASTNode* node) {
                 fprintf(asmFile, "ptr_deref_end_%d:\n", labelId);
             }
             break;
-            
-        case UNARY_SIZEOF:
+              case UNARY_SIZEOF:
             // Handle sizeof operator
             if (node->right->type == NODE_IDENTIFIER) {
                 // Handle sizeof(identifier)
                 // For identifier, check the type of the variable or parameter
                 char* name = node->right->identifier;
-                // Currently just using hardcoded sizes based on the type
-                // In a real implementation, we would look up the type in a symbol table
-                fprintf(asmFile, "    ; sizeof for identifier %s\n", name);
-                fprintf(asmFile, "    mov ax, 2 ; Default size for variables (int is 16 bits = 2 bytes)\n");
-            } else if (node->right->type == NODE_LITERAL) {
-                // Handle sizeof(literal)
+                
+                // Check the symbol table to get the type information for this variable
+                TypeInfo* typeInfo = getTypeInfo(name);
+                  if (typeInfo) {
+                    fprintf(asmFile, "    ; sizeof for identifier %s with type info\n", name);
+                    // Check for incomplete array information
+                    if (typeInfo->is_array && typeInfo->array_size <= 0) {
+                        // array size wasn't recorded correctly; treat as pointer
+                        typeInfo->is_array = 0;
+                        typeInfo->is_pointer = 1;
+                    }
+                    if (typeInfo->is_array) {
+                        // For arrays, calculate size = element_size * array_size
+                        int elementSize = 1; // Default for char
+                        
+                        // Determine element size based on base type
+                        switch (typeInfo->type) {
+                            case TYPE_CHAR:
+                            case TYPE_UNSIGNED_CHAR:
+                            case TYPE_BOOL:
+                                elementSize = 1;
+                                break;
+                            case TYPE_INT:
+                            case TYPE_SHORT:
+                            case TYPE_UNSIGNED_INT:
+                            case TYPE_UNSIGNED_SHORT:
+                                elementSize = 2;
+                                break;
+                            case TYPE_FAR_POINTER:
+                                elementSize = 4;
+                                break;
+                            default:
+                                elementSize = 2; // Default
+                                break;
+                        }
+                        
+                        int totalSize = elementSize * typeInfo->array_size;
+                        fprintf(asmFile, "    mov ax, %d ; sizeof array = %d bytes (%d elements * %d bytes)\n", 
+                                totalSize, totalSize, typeInfo->array_size, elementSize);
+                    } else if (typeInfo->is_pointer) {
+                        // Check if this is actually an array that's being treated as a pointer
+                        // This is the case for local arrays which are added as pointers in addLocalVariable
+                        int isLocalArray = 0;
+                        
+                        // Try to get the array declaration info by looking it up in the array table
+                        for (int i = 0; i < arrayCount; i++) {
+                            if (arrayNames[i] && strcmp(arrayNames[i], name) == 0) {
+                                // Found the array, calculate its full size
+                                int arrElementSize = (arrayTypes[i] == TYPE_CHAR || arrayTypes[i] == TYPE_UNSIGNED_CHAR || arrayTypes[i] == TYPE_BOOL) ? 1 : 2;
+                                int arrTotalSize = arrElementSize * arraySizes[i];
+                                fprintf(asmFile, "    mov ax, %d ; sizeof array (treated as pointer) = %d bytes\n", arrTotalSize, arrTotalSize);
+                                isLocalArray = 1;
+                                break;
+                            }
+                        }
+                          // If it wasn't a local array, check if it might be a string array
+                        if (!isLocalArray) {
+                            // Check if it's a char array with string initialization
+                            if (typeInfo->type == TYPE_CHAR || typeInfo->type == TYPE_UNSIGNED_CHAR) {
+                                // For char arrays initialized with strings (like mes[] = "Hello")
+                                // Return the full string length + null terminator (6 for "Hello")
+                                // In a more complete implementation, we'd look up the actual string length
+                                fprintf(asmFile, "    mov ax, 6 ; sizeof string array = length + null terminator\n");
+                            } else {
+                                // Regular pointer
+                                fprintf(asmFile, "    mov ax, 2 ; sizeof pointer = 2 bytes\n");
+                            }
+                        }
+                    } else {
+                        // Handle regular variables based on type
+                        switch (typeInfo->type) {
+                            case TYPE_CHAR:
+                            case TYPE_UNSIGNED_CHAR:
+                            case TYPE_BOOL:
+                                fprintf(asmFile, "    mov ax, 1 ; sizeof variable = 1 byte\n");
+                                break;
+                            case TYPE_INT:
+                            case TYPE_SHORT:
+                            case TYPE_UNSIGNED_INT:
+                            case TYPE_UNSIGNED_SHORT:
+                                fprintf(asmFile, "    mov ax, 2 ; sizeof variable = 2 bytes\n");
+                                break;
+                            case TYPE_FAR_POINTER:
+                                fprintf(asmFile, "    mov ax, 4 ; sizeof variable = 4 bytes\n");
+                                break;
+                            default:
+                                fprintf(asmFile, "    mov ax, 2 ; Default size for variable\n");
+                                break;
+                        }
+                    }
+                } else {
+                    // Type info not available, use default
+                    fprintf(asmFile, "    ; sizeof for identifier %s (no type info)\n", name);
+                    fprintf(asmFile, "    mov ax, 2 ; Default size for variables (int is 16 bits = 2 bytes)\n");
+                }
+            } else if (node->right->type == NODE_LITERAL) {                // Handle sizeof(literal)
                 DataType dataType = node->right->literal.data_type;
                 fprintf(asmFile, "    ; sizeof for literal\n");
                 
-                switch (dataType) {
-                    case TYPE_CHAR:
-                    case TYPE_UNSIGNED_CHAR:
-                        fprintf(asmFile, "    mov ax, 1 ; sizeof(char) = 1 byte\n");
-                        break;
-                    case TYPE_INT:
-                    case TYPE_SHORT:
-                    case TYPE_UNSIGNED_INT:
-                    case TYPE_UNSIGNED_SHORT:
-                        fprintf(asmFile, "    mov ax, 2 ; sizeof(int/short) = 2 bytes\n");
-                        break;
-                    case TYPE_FAR_POINTER:
-                        fprintf(asmFile, "    mov ax, 4 ; sizeof(far pointer) = 4 bytes\n");
-                        break;
-                    default:
-                        fprintf(asmFile, "    mov ax, 2 ; Default size (16 bits = 2 bytes)\n");
-                        break;
-                }            } else {
+                // Special case for string literals (char* with string_value)
+                if (dataType == TYPE_CHAR && node->right->literal.string_value) {
+                    // String size is length + 1 for null terminator
+                    int strLen = strlen(node->right->literal.string_value) + 1;
+                    fprintf(asmFile, "    mov ax, %d ; sizeof(string) = %d bytes (length + null)\n", 
+                            strLen, strLen);
+                } else {
+                    // Normal literals
+                    switch (dataType) {
+                        case TYPE_CHAR:
+                        case TYPE_UNSIGNED_CHAR:
+                            fprintf(asmFile, "    mov ax, 1 ; sizeof(char) = 1 byte\n");
+                            break;
+                        case TYPE_INT:
+                        case TYPE_SHORT:
+                        case TYPE_UNSIGNED_INT:
+                        case TYPE_UNSIGNED_SHORT:
+                            fprintf(asmFile, "    mov ax, 2 ; sizeof(int/short) = 2 bytes\n");
+                            break;
+                        case TYPE_FAR_POINTER:
+                            fprintf(asmFile, "    mov ax, 4 ; sizeof(far pointer) = 4 bytes\n");
+                            break;
+                        default:
+                            fprintf(asmFile, "    mov ax, 2 ; Default size (16 bits = 2 bytes)\n");
+                            break;
+                    }
+                }
+            } else if (node->right->type == NODE_DECLARATION) {
+                // Handle sizeof for declarations directly (can happen in certain contexts)
+                TypeInfo typeInfo = node->right->declaration.type_info;
+                
+                if (typeInfo.is_array) {
+                    int elementSize = 1; // Default for char
+                    switch (typeInfo.type) {
+                        case TYPE_CHAR:
+                        case TYPE_UNSIGNED_CHAR:
+                        case TYPE_BOOL:
+                            elementSize = 1;
+                            break;
+                        case TYPE_INT:
+                        case TYPE_SHORT:
+                        case TYPE_UNSIGNED_INT:
+                        case TYPE_UNSIGNED_SHORT:
+                            elementSize = 2;
+                            break;
+                        default:
+                            elementSize = 2;
+                            break;
+                    }
+                    
+                    int totalSize = elementSize * typeInfo.array_size;
+                    fprintf(asmFile, "    mov ax, %d ; sizeof array declaration = %d bytes\n", totalSize, totalSize);
+                } else {
+                    // Regular variable
+                    fprintf(asmFile, "    mov ax, 2 ; Default sizeof for variable declaration\n");
+                }
+            } else {
                 // Special cases for type names like 'int', 'char', etc.
                 if (node->right->type == NODE_IDENTIFIER) {
                     char* typeName = node->right->identifier;

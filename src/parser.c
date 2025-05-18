@@ -258,9 +258,6 @@ ASTNode* parseVariableDeclaration(char* name, TypeInfo typeInfo) {
     node->declaration.var_name = name;
     node->declaration.type_info = typeInfo;
     
-    // Register the variable and its type in the symbol table for type checking
-    addTypeSymbol(name, typeInfo);
-    
     // Check for array declaration
     if (tokenIs(TOKEN_LBRACKET)) {
         consume(TOKEN_LBRACKET);
@@ -323,6 +320,9 @@ ASTNode* parseVariableDeclaration(char* name, TypeInfo typeInfo) {
         }
     }
     
+    // Register the variable and its type in the symbol table for type checking (after array/initializer processed)
+    addTypeSymbol(node->declaration.var_name, node->declaration.type_info);
+
     expect(TOKEN_SEMICOLON);
     return node;
 }

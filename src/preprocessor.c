@@ -39,6 +39,7 @@ void initPreprocessor() {
     defineMacro("__NCC_MAJOR__", "1");    // Major version
     defineMacro("__NCC_MINOR__", "12");   // Minor version
     defineMacro("__x86_16__", "1");
+
 }
 
 // Add an include path

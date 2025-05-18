@@ -9,6 +9,9 @@ void addTypeSymbol(const char* name, TypeInfo type);
 // Find a symbol in the table
 TypeInfo* findTypeSymbol(const char* name);
 
+// Get type information for a symbol (for use in codegen)
+TypeInfo* getTypeInfo(const char* name);
+
 // Function to check if a node's type is a void pointer
 int isVoidPointer(ASTNode* node);
 
