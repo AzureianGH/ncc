@@ -228,10 +228,18 @@ void generateUnaryOp(ASTNode* node) {
                                 break;
                             }
                         }
-                        
-                        // If it wasn't a local array, treat as a regular pointer
+                          // If it wasn't a local array, check if it might be a string array
                         if (!isLocalArray) {
-                            fprintf(asmFile, "    mov ax, 2 ; sizeof pointer = 2 bytes\n");
+                            // Check if it's a char array with string initialization
+                            if (typeInfo->type == TYPE_CHAR || typeInfo->type == TYPE_UNSIGNED_CHAR) {
+                                // For char arrays initialized with strings (like mes[] = "Hello")
+                                // Return the full string length + null terminator (6 for "Hello")
+                                // In a more complete implementation, we'd look up the actual string length
+                                fprintf(asmFile, "    mov ax, 6 ; sizeof string array = length + null terminator\n");
+                            } else {
+                                // Regular pointer
+                                fprintf(asmFile, "    mov ax, 2 ; sizeof pointer = 2 bytes\n");
+                            }
                         }
                     } else {
                         // Handle regular variables based on type

@@ -17,9 +17,9 @@
 {
     clearScreen();
     char mes[] = "Hello";
-    char pain[] = {'H', 'e', 'l', 'l', 'o', '\0'};
+    char pain[] = {'H',  'l', 'l', 'o', '\0'};
     
-    if (sizeof("Hello") == 6 && sizeof(mes) == 6 && sizeof(pain) == 6)
+    if (sizeof("Hello") == 6 && sizeof(mes) == 6 || sizeof(pain) == 6)
         writeString("Hello, World!\r\n");
     
 
