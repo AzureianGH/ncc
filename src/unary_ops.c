@@ -63,23 +63,76 @@ ASTNode* parseUnaryExpression() {
         node->operation.op = UNARY_BITWISE_NOT;
         node->right = operand;
         return node;
-    }
-    else if (tokenIs(TOKEN_SIZEOF)) {
+    }    else if (tokenIs(TOKEN_SIZEOF)) {
         // sizeof operator
         consume(TOKEN_SIZEOF);
         
         // sizeof expects a parenthesized expression or type name
         expect(TOKEN_LPAREN);
         
-        // Parse the expression inside
-        ASTNode* operand = parseExpression();
+        // First check if it's a type name like int, char, etc.
+        Token token = getCurrentToken();
         
-        expect(TOKEN_RPAREN);
-        
-        ASTNode* node = createNode(NODE_UNARY_OP);
-        node->operation.op = UNARY_SIZEOF;
-        node->right = operand;
-        return node;
+        if (token.type == TOKEN_INT || token.type == TOKEN_SHORT || token.type == TOKEN_CHAR ||
+            token.type == TOKEN_VOID || token.type == TOKEN_BOOL || token.type == TOKEN_UNSIGNED) {
+            // This is a type name, create a special identifier node for it
+            ASTNode* operand = createNode(NODE_IDENTIFIER);
+            
+            if (token.type == TOKEN_UNSIGNED) {
+                consume(token.type); // consume 'unsigned'
+                token = getCurrentToken();
+                
+                if (token.type == TOKEN_INT) {
+                    operand->identifier = strdup("unsigned int");
+                    consume(token.type);
+                } else if (token.type == TOKEN_CHAR) {
+                    operand->identifier = strdup("unsigned char");
+                    consume(token.type);
+                } else if (token.type == TOKEN_SHORT) {
+                    operand->identifier = strdup("unsigned short");
+                    consume(token.type);
+                } else {
+                    operand->identifier = strdup("unsigned");
+                    // No need to consume anything else
+                }
+            } else {
+                // Regular type
+                if (token.type == TOKEN_INT) operand->identifier = strdup("int");
+                else if (token.type == TOKEN_CHAR) operand->identifier = strdup("char");
+                else if (token.type == TOKEN_SHORT) operand->identifier = strdup("short");
+                else if (token.type == TOKEN_VOID) operand->identifier = strdup("void");
+                else if (token.type == TOKEN_BOOL) operand->identifier = strdup("bool");
+                
+                consume(token.type);
+            }
+            
+            // Handle pointer types (e.g., int*, char*)
+            while (tokenIs(TOKEN_STAR)) {
+                char* oldType = operand->identifier;
+                char* newType = malloc(strlen(oldType) + 2);  // +2 for '*' and '\0'
+                sprintf(newType, "%s*", oldType);
+                free(oldType);
+                operand->identifier = newType;
+                consume(TOKEN_STAR);
+            }
+            
+            expect(TOKEN_RPAREN);
+            
+            ASTNode* node = createNode(NODE_UNARY_OP);
+            node->operation.op = UNARY_SIZEOF;
+            node->right = operand;
+            return node;
+        } else {
+            // Not a type name, just a regular expression
+            ASTNode* operand = parseExpression();
+            
+            expect(TOKEN_RPAREN);
+            
+            ASTNode* node = createNode(NODE_UNARY_OP);
+            node->operation.op = UNARY_SIZEOF;
+            node->right = operand;
+            return node;
+        }
     }
     else if (tokenIs(TOKEN_INCREMENT)) {
         // Prefix increment (++x)

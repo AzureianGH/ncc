@@ -193,17 +193,24 @@ void generateUnaryOp(ASTNode* node) {
                     default:
                         fprintf(asmFile, "    mov ax, 2 ; Default size (16 bits = 2 bytes)\n");
                         break;
-                }
-            } else {
+                }            } else {
                 // Special cases for type names like 'int', 'char', etc.
                 if (node->right->type == NODE_IDENTIFIER) {
                     char* typeName = node->right->identifier;
-                    if (strcmp(typeName, "int") == 0 || strcmp(typeName, "short") == 0) {
+                    if (strcmp(typeName, "int") == 0 || strcmp(typeName, "short") == 0 || 
+                        strcmp(typeName, "unsigned int") == 0 || strcmp(typeName, "unsigned short") == 0) {
                         fprintf(asmFile, "    mov ax, 2 ; sizeof(int/short) = 2 bytes\n");
-                    } else if (strcmp(typeName, "char") == 0) {
+                    } else if (strcmp(typeName, "char") == 0 || strcmp(typeName, "unsigned char") == 0) {
                         fprintf(asmFile, "    mov ax, 1 ; sizeof(char) = 1 byte\n");
-                    } else if (strcmp(typeName, "long") == 0) {
+                    } else if (strcmp(typeName, "long") == 0 || strcmp(typeName, "unsigned long") == 0) {
                         fprintf(asmFile, "    mov ax, 4 ; sizeof(long) = 4 bytes\n");
+                    } else if (strcmp(typeName, "bool") == 0) {
+                        fprintf(asmFile, "    mov ax, 1 ; sizeof(bool) = 1 byte\n");
+                    } else if (strcmp(typeName, "void") == 0) {
+                        fprintf(asmFile, "    mov ax, 0 ; sizeof(void) = 0 bytes\n");
+                    } else if (strstr(typeName, "*") != NULL) {
+                        // Handle pointer types
+                        fprintf(asmFile, "    mov ax, 2 ; sizeof pointer = 2 bytes (near pointer)\n");
                     } else {
                         fprintf(asmFile, "    mov ax, 2 ; Default size (16 bits = 2 bytes)\n");
                     }
