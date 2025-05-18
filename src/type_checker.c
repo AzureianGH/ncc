@@ -36,6 +36,11 @@ TypeInfo* findTypeSymbol(const char* name) {
     return NULL;
 }
 
+// Get type information for a symbol (for use in codegen)
+TypeInfo* getTypeInfo(const char* name) {
+    return findTypeSymbol(name);
+}
+
 // Function to check if a node's type is a void pointer
 int isVoidPointer(ASTNode* node) {
     // If it's an identifier, we need to find its type
