@@ -12,7 +12,8 @@ typedef enum {
     TYPE_CHAR,          // 8-bit signed integer
     TYPE_UNSIGNED_CHAR, // 8-bit unsigned integer
     TYPE_VOID,          // void type
-    TYPE_FAR_POINTER    // Far pointer (segment:offset)
+    TYPE_FAR_POINTER,   // Far pointer (segment:offset)
+    TYPE_BOOL           // C23 bool type (1 byte)
 } DataType;
 
 // AST node types
@@ -45,6 +46,8 @@ typedef enum {
     OP_MOD,  // %
     OP_EQ,   // ==
     OP_NEQ,  // !=    
+    OP_LAND, // logical AND (&&)
+    OP_LOR,  // logical OR (||)
     OP_LT,   // <
     OP_LTE,  // <=
     OP_GT,   // >
@@ -68,6 +71,7 @@ typedef enum {
     UNARY_NEGATE,        // -x
     UNARY_NOT,           // !x
     UNARY_BITWISE_NOT,   // ~x
+    UNARY_SIZEOF,        // sizeof(x)
     PREFIX_INCREMENT,    // ++x
     PREFIX_DECREMENT,    // --x
     POSTFIX_INCREMENT,   // x++

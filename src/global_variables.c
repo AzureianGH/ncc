@@ -1,0 +1,128 @@
+#include "codegen.h"
+#include "ast.h"
+#include "error_manager.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+// Global variable tracking
+static int globalCount = 0;
+static ASTNode** globalDeclarations = NULL;
+static int globalMarkerFound = 0;
+
+// Add a global declaration to be generated later
+void addGlobalDeclaration(ASTNode* node) {
+    if (!node || node->type != NODE_DECLARATION) return;
+    
+    // Resize the array if needed
+    if (globalCount == 0) {
+        globalDeclarations = malloc(sizeof(ASTNode*));
+    } else {
+        globalDeclarations = realloc(globalDeclarations, (globalCount + 1) * sizeof(ASTNode*));
+    }
+    
+    if (!globalDeclarations) {
+        fprintf(stderr, "Error: Memory allocation failed for global declarations\n");
+        exit(1);
+    }
+    
+    // Add to the globals list
+    globalDeclarations[globalCount++] = node;
+}
+
+// Check if the globals marker was found
+int isGlobalMarkerFound() {
+    return globalMarkerFound;
+}
+
+// Mark that the global variables were generated
+void setGlobalMarkerFound(int found) {
+    globalMarkerFound = found;
+}
+
+// Generate all collected global variables
+void generateGlobalsAtMarker(FILE* asmFile) {
+    // Skip if no globals to generate or already generated
+    if (globalMarkerFound || globalCount == 0) return;
+    
+    // Mark that globals have been generated
+    globalMarkerFound = 1;
+    
+    fprintf(asmFile, "; Global variables placed at _NCC_GLOBAL_LOC\n");
+    
+    for (int i = 0; i < globalCount; i++) {
+        ASTNode* node = globalDeclarations[i];
+        
+        if (node && node->type == NODE_DECLARATION) {
+            // Skip arrays - they have their own dedicated section
+            if (node->declaration.type_info.is_array) continue;
+            
+            fprintf(asmFile, "; Global variable: %s\n", node->declaration.var_name);
+            
+            // Define the variable with a label
+            fprintf(asmFile, "_%s:\n", node->declaration.var_name);
+            
+            // Initialize global variables
+            if (node->declaration.initializer && node->declaration.initializer->type == NODE_LITERAL) {
+                // Literal initializer
+                switch (node->declaration.initializer->literal.data_type) {
+                    case TYPE_INT:
+                        fprintf(asmFile, "    dw %d ; Integer value\n\n", 
+                            node->declaration.initializer->literal.int_value);
+                        break;
+                    case TYPE_CHAR:
+                        fprintf(asmFile, "    db '%c' ; Character value\n\n", 
+                            node->declaration.initializer->literal.char_value);
+                        break;
+                    case TYPE_BOOL:
+                        fprintf(asmFile, "    db %d ; Boolean value (%s)\n\n", 
+                            node->declaration.initializer->literal.int_value, 
+                            node->declaration.initializer->literal.int_value ? "true" : "false");
+                        break;
+                    case TYPE_FAR_POINTER:
+                        // Far pointer is stored as offset (low word) followed by segment (high word)
+                        fprintf(asmFile, "    dw %d ; Offset\n", 
+                            node->declaration.initializer->literal.offset);
+                        fprintf(asmFile, "    dw %d ; Segment\n\n", 
+                            node->declaration.initializer->literal.segment);
+                        break;
+                    default:
+                        fprintf(asmFile, "    dw 0 ; Default zero initialization\n\n");
+                }
+            } else {                // No initializer - use zero
+                // Determine size based on type
+                if (node->declaration.type_info.type == TYPE_CHAR || 
+                    node->declaration.type_info.type == TYPE_UNSIGNED_CHAR ||
+                    node->declaration.type_info.type == TYPE_BOOL) {
+                    // Use byte (1 byte) for char types
+                    fprintf(asmFile, "    db 0 ; Zero initialization\n\n");
+                } else if (node->declaration.type_info.is_far_pointer) {
+                    // Far pointer is 4 bytes (2 for offset, 2 for segment)
+                    fprintf(asmFile, "    dw 0 ; Offset (zero initialization)\n");
+                    fprintf(asmFile, "    dw 0 ; Segment (zero initialization)\n\n");
+                } else {
+                    fprintf(asmFile, "    dw 0 ; Zero initialization\n\n");
+                }
+            }
+        }
+    }
+}
+
+// Generate any remaining globals that weren't emitted at a marker
+void generateRemainingGlobals(FILE* asmFile) {
+    // Skip if globals were already generated at a marker
+    if (globalMarkerFound || globalCount == 0) return;
+    
+    fprintf(asmFile, "; Global variables (no _NCC_GLOBAL_LOC marker found)\n");
+    generateGlobalsAtMarker(asmFile);
+}
+
+// Free allocated memory
+void cleanupGlobals() {
+    if (globalDeclarations) {
+        free(globalDeclarations);
+        globalDeclarations = NULL;
+    }
+    globalCount = 0;
+    globalMarkerFound = 0;
+}

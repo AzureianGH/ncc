@@ -50,7 +50,8 @@ int isMacroDefined(const char* name);
 // Get the value of a defined macro (returns NULL if undefined)
 const char* getMacroValue(const char* name);
 
-// Free preprocessor resources
-void cleanupPreprocessor();
+// Evaluate a preprocessing expression (for #if directive)
+// Returns 1 if the expression evaluates to non-zero, 0 otherwise
+int evaluatePreprocessorExpression(const char* expr);
 
 #endif // PREPROCESSOR_H

@@ -12,6 +12,8 @@
         "symbol.h": "c",
         "stdio.h": "c",
         "bootloader.h": "c",
-        "codegen.h": "c"
+        "codegen.h": "c",
+        "stdlib.h": "c",
+        "typeinfo.h": "c"
     }
 }

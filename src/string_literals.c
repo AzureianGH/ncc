@@ -196,8 +196,7 @@ extern void generateArrayWithInitializers(ASTNode* node);
 void generateArraysAtMarker() {
     // Skip if no arrays to generate or already generated
     if (arrayMarkerFound || arrayCount == 0) return;
-    
-    // Mark that arrays have been generated
+      // Mark that arrays have been generated
     arrayMarkerFound = 1;
     
     fprintf(asmFile, "; Array declarations placed at _NCC_ARRAY_LOC\n");
@@ -212,6 +211,7 @@ void generateArraysAtMarker() {
         switch (arrayTypes[i]) {
             case TYPE_CHAR:
             case TYPE_UNSIGNED_CHAR:
+            case TYPE_BOOL:
                 directive = "db";
                 elementSize = 1;
                 break;
@@ -259,14 +259,14 @@ void generateStringLiteralsSection() {
         fprintf(asmFile, "\n; Array declarations section\n");
         for (int i = 0; i < arrayCount; i++) {
             fprintf(asmFile, "_%s: ", arrayNames[i]);
-            
-            // Determine element size and directive
+              // Determine element size and directive
             const char* directive;
             int elementSize;
             
             switch (arrayTypes[i]) {
                 case TYPE_CHAR:
                 case TYPE_UNSIGNED_CHAR:
+                case TYPE_BOOL:
                     directive = "db";
                     elementSize = 1;
                     break;

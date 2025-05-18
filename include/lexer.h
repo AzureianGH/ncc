@@ -16,14 +16,20 @@ typedef enum {
     TOKEN_ASM,
     TOKEN_STACKFRAME,
     TOKEN_FARCALLED,
+    // Legacy attribute
     TOKEN_ATTRIBUTE,     // __attribute__
     TOKEN_NAKED,         // naked
     TOKEN_IF,
     TOKEN_ELSE,
     TOKEN_WHILE,
     TOKEN_FOR,
-    TOKEN_RETURN,
-    
+    TOKEN_RETURN,    TOKEN_BOOL,          // bool (C23)
+    TOKEN_TRUE,          // true (C23)
+    TOKEN_FALSE,         // false (C23)
+    TOKEN_SIZEOF,        // sizeof
+    TOKEN_ATTR_OPEN,     // [[
+    TOKEN_ATTR_CLOSE,    // ]]
+
     // Identifiers and literals
     TOKEN_IDENTIFIER,
     TOKEN_NUMBER,

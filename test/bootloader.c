@@ -1,6 +1,7 @@
 #include "test/bootloader.h"
 
-__attribute__((naked)) void biosInitialize() {
+
+[[naked]] void biosInitialize() {
     __asm("cli");           // Disable interrupts
 
     __asm("xor ax, ax");
@@ -12,35 +13,39 @@ __attribute__((naked)) void biosInitialize() {
     __asm("jmp _main");     // Jump to main function
 }
 
-__attribute__((naked)) void main()
+[[naked]] void main()
 {
     clearScreen();
-    randomString();
-    writeChar('A');
-    haltForever();
-}
 
-__attribute__((naked)) void haltForever()
-{
-    __asm("cli");           // Disable interrupts
-    __asm("hlt");           // Halt CPU
-    __asm("jmp _haltForever"); // Infinite loop
+    if (sizeof(int) == 2) writeString("Hello, World!\r\n");
+    
+
+    haltForever();
 }
 
 void writeChar(char c)
 {
-    //get al from stack
     __asm("mov al, [bp+4]"); // Get character from stack
     __asm("mov ah, 0x0E"); // BIOS teletype function
     __asm("mov bx, 0x0007"); // Attribute (light gray on black)
     __asm("int 0x10");       // BIOS interrupt to write character
 }
 
-void randomString()
+void writeString(char* str)
 {
-    char* str = "Hello, World!\n";
-    writeChar(str[0]);
+    for (int i = 0; i < strlen(str); i++) {
+        writeChar(str[i]);
+    }
 }
+
+[[naked]] void haltForever()
+{
+    __asm("cli");           // Disable interrupts
+    __asm("hlt");           // Halt CPU
+    __asm("jmp _haltForever"); // Infinite loop
+}
+
+
 
 void clearScreen()
 {
@@ -48,11 +53,28 @@ void clearScreen()
     __asm("int 0x10");       // BIOS interrupt to set video mode
 }
 
-__attribute__((naked)) void _NCC_STRING_LOC() {}
+int strlen(char* s) {
+    char* p = s;
+    while (*p) p++;
+    return p - s;
+}
 
-__attribute__((naked)) void _NCC_ARRAY_LOC() {}
+void strcpy(char* dest, char* src)
+{
+    while (*src) {
+        *dest++ = *src++;
+    }
+    *dest = '\0';
+}
 
-__attribute__((naked)) void biosPadding()
+
+[[naked]] void _NCC_STRING_LOC() {}
+
+[[naked]] void _NCC_ARRAY_LOC() {}
+
+[[naked]] void _NCC_GLOBAL_LOC() {}
+
+[[naked]] void biosPadding()
 {
     __asm("times 510 - ($ - $$) db 0");
     __asm("dw 0xAA55");

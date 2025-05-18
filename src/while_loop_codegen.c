@@ -9,19 +9,22 @@ extern FILE* asmFile;
 extern char* generateLabel(const char* prefix);
 extern void generateStatement(ASTNode* node);
 extern void generateExpression(ASTNode* node);
+extern void generateBlock(ASTNode* node);  // Add forward declaration for blocks
 
 // Generate code for a while loop
 void generateWhileLoop(ASTNode* node) {
     if (!node || node->type != NODE_WHILE) return;
     
-    // Generate labels for loop condition and end
+    // Generate labels for loop condition, loop body and end
     char* condLabel = generateLabel("while_cond");
+    char* bodyLabel = generateLabel("while_body");
     char* endLabel = generateLabel("while_end");
     
     // Start with condition check
     fprintf(asmFile, "    ; While loop\n");
     fprintf(asmFile, "%s:\n", condLabel);
-      // Generate condition evaluation
+      
+    // Generate condition evaluation
     if (node->while_loop.condition) {
         generateExpression(node->while_loop.condition);
         
@@ -30,14 +33,22 @@ void generateWhileLoop(ASTNode* node) {
         fprintf(asmFile, "    jz %s\n", endLabel);
     }
     
+    // Body start label
+    fprintf(asmFile, "%s:\n", bodyLabel);
+
     // Generate loop body
     if (node->while_loop.body) {
-        generateStatement(node->while_loop.body);
+        fprintf(asmFile, "    ; Loop body\n");
+        if (node->while_loop.body->type == NODE_BLOCK) {
+            generateBlock(node->while_loop.body);
+        } else {
+            generateStatement(node->while_loop.body);
+        }
     } else {
         fprintf(asmFile, "    ; Warning: Empty loop body\n");
     }
     
-    // Jump back to condition
+    // Jump back to condition after loop body execution
     fprintf(asmFile, "    jmp %s\n", condLabel);
     
     // End of loop

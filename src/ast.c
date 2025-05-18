@@ -56,6 +56,7 @@ const char* getDataTypeName(DataType type) {
         case TYPE_UNSIGNED_CHAR: return "unsigned char";
         case TYPE_VOID: return "void";
         case TYPE_FAR_POINTER: return "far pointer";
+        case TYPE_BOOL: return "bool";
         default: return "unknown";
     }
 }
@@ -70,6 +71,7 @@ int getTypeSize(DataType type) {
             return 2;  // 16-bit
         case TYPE_CHAR:
         case TYPE_UNSIGNED_CHAR:
+        case TYPE_BOOL:
             return 1;  // 8-bit
         case TYPE_VOID:
             return 0;
@@ -106,12 +108,13 @@ void printAST(ASTNode* node, int indent) {
             break;
         case NODE_IDENTIFIER:
             printf(" (name: %s)", node->identifier);
-            break;
-        case NODE_LITERAL:
+            break;        case NODE_LITERAL:
             if (node->literal.data_type == TYPE_INT) {
                 printf(" (value: %d)", node->literal.int_value);
             } else if (node->literal.data_type == TYPE_FAR_POINTER) {
                 printf(" (far ptr: %04X:%04X)", node->literal.segment, node->literal.offset);
+            } else if (node->literal.data_type == TYPE_BOOL) {
+                printf(" (value: %s)", node->literal.int_value ? "true" : "false");
             }
             break;
         case NODE_CALL:

@@ -39,4 +39,24 @@ void parseFunctionAttributes(FunctionInfo* funcInfo) {
         expect(TOKEN_RPAREN);
         expect(TOKEN_RPAREN);
     }
+    else if (tokenIs(TOKEN_ATTR_OPEN)) {
+        // Parse C23 attribute syntax [[naked]]
+        consume(TOKEN_ATTR_OPEN);
+        while (!tokenIs(TOKEN_ATTR_CLOSE)) {
+            if (tokenIs(TOKEN_NAKED)) {
+                consume(TOKEN_NAKED);
+                funcInfo->is_naked = 1;
+            } else if (tokenIs(TOKEN_IDENTIFIER)) {
+                consume(TOKEN_IDENTIFIER);
+            } else {
+                break;
+            }
+            if (tokenIs(TOKEN_COMMA)) {
+                consume(TOKEN_COMMA);
+            } else {
+                break;
+            }
+        }
+        expect(TOKEN_ATTR_CLOSE);
+    }
 }

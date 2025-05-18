@@ -11,13 +11,93 @@ extern int getVariableOffset(const char* name);
 extern int isParameter(const char* name);
 extern int getNextLabelId();
 extern int labelCounter;
+extern void generateExpression(ASTNode* node);
+
+#ifdef __GNUC__
+#pragma GCC diagnostic ignored "-Wunused-parameter"
+#endif
+
+// Check if we're accessing a string literal or array with constant index
+static int isOptimizableArrayAccess(ASTNode* array, ASTNode* index) {
+    // Simple case: literal integer index
+    if (index->type == NODE_LITERAL && 
+        (index->literal.data_type == TYPE_INT || index->literal.data_type == TYPE_CHAR)) {
+        return 1;
+    }
+    
+    return 0;
+}
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
+
+// Generate optimized code for array indexing with literal index
+static void generateOptimizedArrayAccess(ASTNode* array, ASTNode* index) {
+    // First generate code to get the array address
+    if (array->type == NODE_IDENTIFIER) {
+        char* name = array->identifier;
+        
+        if (isParameter(name)) {
+            // Parameter array - get address from BP + offset
+            fprintf(asmFile, "    ; Array parameter %s\n", name);
+            fprintf(asmFile, "    mov bx, [bp+%d] ; Load array pointer from parameter\n", 
+                  -getVariableOffset(name));
+        } else {
+            // Local variable array - compute address from BP - offset
+            fprintf(asmFile, "    ; Array variable %s\n", name);
+            fprintf(asmFile, "    mov bx, [bp-%d] ; Load array address\n", 
+                  getVariableOffset(name));
+        }
+    } else {
+        // For other expressions, evaluate to get pointer
+        generateExpression(array);
+        fprintf(asmFile, "    mov bx, ax ; Move array pointer to BX\n");
+    }
+    
+    // If the index is a literal, we can directly compute the offset
+    if (index->type == NODE_LITERAL) {
+        int indexValue = index->literal.int_value;
+        if (indexValue == 0) {
+            // Direct access to first element
+            fprintf(asmFile, "    ; Direct access to array element 0\n");
+            fprintf(asmFile, "    mov al, [bx] ; Access array[0]\n");
+            fprintf(asmFile, "    xor ah, ah ; Clear high byte\n");
+        } else {
+            // Direct access with fixed offset
+            fprintf(asmFile, "    ; Direct access to array element %d\n", indexValue);
+            fprintf(asmFile, "    mov al, [bx+%d] ; Access array[%d]\n", indexValue, indexValue);
+            fprintf(asmFile, "    xor ah, ah ; Clear high byte\n");
+        }
+    } else {
+        // Variable index needs more complex code
+        generateExpression(index);
+        fprintf(asmFile, "    ; Computing array access\n");
+        fprintf(asmFile, "    add bx, ax ; Add index to base address\n");
+        fprintf(asmFile, "    mov al, [bx] ; Load array element\n");
+        fprintf(asmFile, "    xor ah, ah ; Clear high byte\n");
+    }
+}
 
 // Generate code for unary operations
 void generateUnaryOp(ASTNode* node) {
     if (!node || node->type != NODE_UNARY_OP) return;
-    
     switch (node->unary_op.op) {
         case UNARY_DEREFERENCE:
+            // Check if this might be an array access operation
+            if (node->right->type == NODE_BINARY_OP && node->right->operation.op == OP_ADD) {
+                // This might be an array access: array + index
+                ASTNode* left = node->right->left;
+                ASTNode* right = node->right->right;
+                
+                // Check if we can optimize this as a string/array access
+                if (isOptimizableArrayAccess(left, right)) {
+                    // Generate optimized access code
+                    generateOptimizedArrayAccess(left, right);
+                    return; // Exit after optimized generation
+                }
+            }
+            
+            // Standard pointer dereference (not optimizable array access)
             // Generate code to evaluate the pointer expression
             generateExpression(node->right);
             
@@ -78,6 +158,61 @@ void generateUnaryOp(ASTNode* node) {
                 fprintf(asmFile, "    ; Null pointer dereference detected\n");
                 fprintf(asmFile, "    mov ax, 0 ; Return 0 for null deref\n");
                 fprintf(asmFile, "ptr_deref_end_%d:\n", labelId);
+            }
+            break;
+            
+        case UNARY_SIZEOF:
+            // Handle sizeof operator
+            if (node->right->type == NODE_IDENTIFIER) {
+                // Handle sizeof(identifier)
+                // For identifier, check the type of the variable or parameter
+                char* name = node->right->identifier;
+                // Currently just using hardcoded sizes based on the type
+                // In a real implementation, we would look up the type in a symbol table
+                fprintf(asmFile, "    ; sizeof for identifier %s\n", name);
+                fprintf(asmFile, "    mov ax, 2 ; Default size for variables (int is 16 bits = 2 bytes)\n");
+            } else if (node->right->type == NODE_LITERAL) {
+                // Handle sizeof(literal)
+                DataType dataType = node->right->literal.data_type;
+                fprintf(asmFile, "    ; sizeof for literal\n");
+                
+                switch (dataType) {
+                    case TYPE_CHAR:
+                    case TYPE_UNSIGNED_CHAR:
+                        fprintf(asmFile, "    mov ax, 1 ; sizeof(char) = 1 byte\n");
+                        break;
+                    case TYPE_INT:
+                    case TYPE_SHORT:
+                    case TYPE_UNSIGNED_INT:
+                    case TYPE_UNSIGNED_SHORT:
+                        fprintf(asmFile, "    mov ax, 2 ; sizeof(int/short) = 2 bytes\n");
+                        break;
+                    case TYPE_FAR_POINTER:
+                        fprintf(asmFile, "    mov ax, 4 ; sizeof(far pointer) = 4 bytes\n");
+                        break;
+                    default:
+                        fprintf(asmFile, "    mov ax, 2 ; Default size (16 bits = 2 bytes)\n");
+                        break;
+                }
+            } else {
+                // Special cases for type names like 'int', 'char', etc.
+                if (node->right->type == NODE_IDENTIFIER) {
+                    char* typeName = node->right->identifier;
+                    if (strcmp(typeName, "int") == 0 || strcmp(typeName, "short") == 0) {
+                        fprintf(asmFile, "    mov ax, 2 ; sizeof(int/short) = 2 bytes\n");
+                    } else if (strcmp(typeName, "char") == 0) {
+                        fprintf(asmFile, "    mov ax, 1 ; sizeof(char) = 1 byte\n");
+                    } else if (strcmp(typeName, "long") == 0) {
+                        fprintf(asmFile, "    mov ax, 4 ; sizeof(long) = 4 bytes\n");
+                    } else {
+                        fprintf(asmFile, "    mov ax, 2 ; Default size (16 bits = 2 bytes)\n");
+                    }
+                } else {
+                    // For expressions, evaluate the expression but return the size
+                    generateExpression(node->right);
+                    // Discard the value and load the size
+                    fprintf(asmFile, "    mov ax, 2 ; Default size for expressions (16 bits = 2 bytes)\n");
+                }
             }
             break;
             

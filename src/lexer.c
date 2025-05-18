@@ -88,10 +88,14 @@ static int isKeyword(const char* str) {
     if (strcmp(str, "__attribute__") == 0) return TOKEN_ATTRIBUTE;
     if (strcmp(str, "naked") == 0) return TOKEN_NAKED;
     if (strcmp(str, "if") == 0) return TOKEN_IF;
-    if (strcmp(str, "else") == 0) return TOKEN_ELSE;
+    if (strcmp(str, "else") == 0) return TOKEN_ELSE;    
     if (strcmp(str, "while") == 0) return TOKEN_WHILE;
     if (strcmp(str, "for") == 0) return TOKEN_FOR;
     if (strcmp(str, "return") == 0) return TOKEN_RETURN;
+    if (strcmp(str, "bool") == 0) return TOKEN_BOOL;
+    if (strcmp(str, "true") == 0) return TOKEN_TRUE;
+    if (strcmp(str, "false") == 0) return TOKEN_FALSE;
+    if (strcmp(str, "sizeof") == 0) return TOKEN_SIZEOF;
     return TOKEN_IDENTIFIER;
 }
 
@@ -268,6 +272,23 @@ Token getNextToken() {
     
     // Handle operators and punctuation
     int startColumn = column;
+    // C23 attributes
+    if (source[position] == '[' && source[position+1] == '[') {
+        token.type = TOKEN_ATTR_OPEN;
+        position += 2;
+        column += 2;
+        token.line = line;
+        token.column = startColumn;
+        return token;
+    }
+    if (source[position] == ']' && source[position+1] == ']') {
+        token.type = TOKEN_ATTR_CLOSE;
+        position += 2;
+        column += 2;
+        token.line = line;
+        token.column = startColumn;
+        return token;
+    }
     switch (source[position]) {
         case '{':
             token.type = TOKEN_LBRACE;

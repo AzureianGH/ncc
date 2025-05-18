@@ -4,9 +4,14 @@
 #include "error_manager.h"
 #include "token_debug.h"
 #include "attributes.h"
+#include "type_checker.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// Forward declarations
+ASTNode* parseLogicalAndExpression();
+ASTNode* parseLogicalOrExpression();
 
 // Initialize parser
 void initParser() {
@@ -30,7 +35,8 @@ int isTypeName(Token token) {
            token.type == TOKEN_CHAR || 
            token.type == TOKEN_VOID || 
            token.type == TOKEN_UNSIGNED ||
-           token.type == TOKEN_FAR;
+           token.type == TOKEN_FAR ||
+           token.type == TOKEN_BOOL;
 }
 
 // Parse a type (int, short, char, etc.)
@@ -58,8 +64,7 @@ TypeInfo parseType() {
             }
             typeInfo.is_far = 1;
         }
-    }
-      // Parse base type
+    }    // Parse base type
     if (tokenIs(TOKEN_INT)) {
         consume(TOKEN_INT);
         typeInfo.type = isUnsigned ? TYPE_UNSIGNED_INT : TYPE_INT;
@@ -68,7 +73,11 @@ TypeInfo parseType() {
         typeInfo.type = isUnsigned ? TYPE_UNSIGNED_SHORT : TYPE_SHORT;
     } else if (tokenIs(TOKEN_CHAR)) {
         consume(TOKEN_CHAR);
-        typeInfo.type = isUnsigned ? TYPE_UNSIGNED_CHAR : TYPE_CHAR;    } else if (tokenIs(TOKEN_VOID)) {
+        typeInfo.type = isUnsigned ? TYPE_UNSIGNED_CHAR : TYPE_CHAR;
+    } else if (tokenIs(TOKEN_BOOL)) {
+        consume(TOKEN_BOOL);
+        typeInfo.type = TYPE_BOOL;
+    } else if (tokenIs(TOKEN_VOID)) {
         consume(TOKEN_VOID);
         typeInfo.type = TYPE_VOID;
     } else {
@@ -123,7 +132,7 @@ ASTNode* parseDeclaration() {
     FunctionInfo tempFuncInfo = {0};
     int hasAttributes = 0;
     
-    if (tokenIs(TOKEN_ATTRIBUTE)) {
+    if (tokenIs(TOKEN_ATTRIBUTE) || tokenIs(TOKEN_ATTR_OPEN)) {
         parseFunctionAttributes(&tempFuncInfo);
         hasAttributes = 1;
     }
@@ -168,9 +177,19 @@ ASTNode* parseParameter() {
     char* name = strdup(getCurrentToken().value);
     consume(TOKEN_IDENTIFIER);
     
-    ASTNode* param = createNode(NODE_DECLARATION);
+    // Check if trying to declare a parameter of type void (which is invalid)
+    // void pointers are allowed, but plain void parameters are not
+    if (typeInfo.type == TYPE_VOID && !typeInfo.is_pointer) {
+        Token token = getCurrentToken();
+        reportError(token.pos, "Parameter '%s' has incomplete type 'void'", name);
+        exit(1);
+    }
+      ASTNode* param = createNode(NODE_DECLARATION);
     param->declaration.var_name = name;
     param->declaration.type_info = typeInfo;
+    
+    // Register the parameter and its type in the symbol table for type checking
+    addTypeSymbol(name, typeInfo);
     
     return param;
 }
@@ -188,7 +207,7 @@ ASTNode* parseFunctionDefinition(char* name, TypeInfo returnType) {
     node->function.info.is_naked = 0;  // Initialize naked flag
     
     // Allow __attribute__ between return type and parameter list
-    if (tokenIs(TOKEN_ATTRIBUTE)) {
+    if (tokenIs(TOKEN_ATTRIBUTE) || tokenIs(TOKEN_ATTR_OPEN)) {
         parseFunctionAttributes(&node->function.info);
     }
     // Parse parameters
@@ -228,9 +247,19 @@ ASTNode* parseFunctionDefinition(char* name, TypeInfo returnType) {
 
 // Parse a variable declaration
 ASTNode* parseVariableDeclaration(char* name, TypeInfo typeInfo) {
-    ASTNode* node = createNode(NODE_DECLARATION);
+    // Check if trying to declare a variable of type void (which is invalid)
+    // void pointers are allowed, but plain void variables are not
+    if (typeInfo.type == TYPE_VOID && !typeInfo.is_pointer) {
+        Token token = getCurrentToken();
+        reportError(token.pos, "Variable '%s' has incomplete type 'void'", name);
+        exit(1);
+    }
+      ASTNode* node = createNode(NODE_DECLARATION);
     node->declaration.var_name = name;
     node->declaration.type_info = typeInfo;
+    
+    // Register the variable and its type in the symbol table for type checking
+    addTypeSymbol(name, typeInfo);
     
     // Check for array declaration
     if (tokenIs(TOKEN_LBRACKET)) {
@@ -486,10 +515,40 @@ ASTNode* parseRelationalExpression() {
     return left;
 }
 
+// Parse a logical AND expression
+ASTNode* parseLogicalAndExpression() {
+    ASTNode* left = parseRelationalExpression();
+    while (tokenIs(TOKEN_AND)) {
+        consume(TOKEN_AND);
+        ASTNode* right = parseRelationalExpression();
+        ASTNode* node = createNode(NODE_BINARY_OP);
+        node->operation.op = OP_LAND;
+        node->left = left;
+        node->right = right;
+        left = node;
+    }
+    return left;
+}
+
+// Parse a logical OR expression
+ASTNode* parseLogicalOrExpression() {
+    ASTNode* left = parseLogicalAndExpression();
+    while (tokenIs(TOKEN_OR)) {
+        consume(TOKEN_OR);
+        ASTNode* right = parseLogicalAndExpression();
+        ASTNode* node = createNode(NODE_BINARY_OP);
+        node->operation.op = OP_LOR;
+        node->left = left;
+        node->right = right;
+        left = node;
+    }
+    return left;
+}
+
 // Parse an assignment expression
 ASTNode* parseAssignmentExpression() {
-    ASTNode* left = parseRelationalExpression();
-    
+    ASTNode* left = parseLogicalOrExpression();
+
     if (tokenIs(TOKEN_ASSIGN) || tokenIs(TOKEN_PLUS_ASSIGN) || tokenIs(TOKEN_MINUS_ASSIGN) ||
         tokenIs(TOKEN_MUL_ASSIGN) || tokenIs(TOKEN_DIV_ASSIGN) || tokenIs(TOKEN_MOD_ASSIGN)) {
         
@@ -513,7 +572,15 @@ ASTNode* parseAssignmentExpression() {
         } else {
             node->assignment.op = 0; // simple assignment
             consume(TOKEN_ASSIGN);
+        }        // Check if left side is a void pointer dereference (i.e., *void_ptr = value)
+        if (left->type == NODE_UNARY_OP && left->unary_op.op == UNARY_DEREFERENCE) {
+            if (isVoidPointer(left->right)) {
+                Token token = getCurrentToken();
+                reportError(token.pos, "Cannot assign to a dereferenced void pointer - it has no defined size");
+                exit(1);
+            }
         }
+        
         node->left = left;
         node->right = parseAssignmentExpression();
         return node;
@@ -737,8 +804,7 @@ ASTNode* parsePrimaryExpression() {
         node->literal.int_value = (unsigned char)ch; // ASCII value of the character
         
         consume(TOKEN_CHAR_LITERAL);
-        return node;
-    } else if (tokenIs(TOKEN_STRING)) {
+        return node;    } else if (tokenIs(TOKEN_STRING)) {
         ASTNode* node = createNode(NODE_LITERAL);
         node->literal.data_type = TYPE_CHAR;
         
@@ -751,6 +817,13 @@ ASTNode* parsePrimaryExpression() {
         }
         
         consume(TOKEN_STRING);
+        return node;
+    } else if (tokenIs(TOKEN_TRUE) || tokenIs(TOKEN_FALSE)) {
+        ASTNode* node = createNode(NODE_LITERAL);
+        node->literal.data_type = TYPE_BOOL;
+        node->literal.int_value = tokenIs(TOKEN_TRUE) ? 1 : 0;
+        
+        consume(tokenIs(TOKEN_TRUE) ? TOKEN_TRUE : TOKEN_FALSE);
         return node;
     } else if (tokenIs(TOKEN_LPAREN)) {
         consume(TOKEN_LPAREN);

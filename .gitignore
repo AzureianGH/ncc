@@ -1,0 +1,5 @@
+/obj
+/.vscode
+test/bootloader.bin
+test/boot.img
+test/bootloader.asm

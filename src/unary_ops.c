@@ -1,6 +1,8 @@
 #include "parser.h"
 #include "lexer.h"
 #include "ast.h"
+#include "error_manager.h"
+#include "type_checker.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -16,11 +18,17 @@ ASTNode* parseUnaryExpression() {
         node->operation.op = UNARY_ADDRESS_OF;
         node->right = operand;
         return node;
-    }
-    else if (tokenIs(TOKEN_STAR)) {
+    }    else if (tokenIs(TOKEN_STAR)) {
         // Dereference operator (*)
         consume(TOKEN_STAR);
         ASTNode* operand = parseUnaryExpression();
+
+        // Check if we're dereferencing a void pointer, which is not allowed
+        if (isVoidPointer(operand)) {
+            Token token = getCurrentToken();
+            reportError(token.pos, "Cannot dereference a void pointer - it has no defined size");
+            exit(1);
+        }
         
         ASTNode* node = createNode(NODE_UNARY_OP);
         node->operation.op = UNARY_DEREFERENCE;
@@ -53,6 +61,23 @@ ASTNode* parseUnaryExpression() {
         
         ASTNode* node = createNode(NODE_UNARY_OP);
         node->operation.op = UNARY_BITWISE_NOT;
+        node->right = operand;
+        return node;
+    }
+    else if (tokenIs(TOKEN_SIZEOF)) {
+        // sizeof operator
+        consume(TOKEN_SIZEOF);
+        
+        // sizeof expects a parenthesized expression or type name
+        expect(TOKEN_LPAREN);
+        
+        // Parse the expression inside
+        ASTNode* operand = parseExpression();
+        
+        expect(TOKEN_RPAREN);
+        
+        ASTNode* node = createNode(NODE_UNARY_OP);
+        node->operation.op = UNARY_SIZEOF;
         node->right = operand;
         return node;
     }

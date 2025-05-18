@@ -10,6 +10,7 @@ extern char* currentFunction;
 extern char* generateLabel(const char* prefix);
 extern void generateStatement(ASTNode* node);
 extern void generateExpression(ASTNode* node);
+extern void generateBlock(ASTNode* node);  // Add forward declaration for blocks
 
 // Generate code for a for loop
 void generateForLoop(ASTNode* node) {
@@ -31,13 +32,17 @@ void generateForLoop(ASTNode* node) {
     
     // Jump to condition check
     fprintf(asmFile, "    jmp %s\n", condLabel);
-    
-    // Start of the loop body
+      // Start of the loop body
     fprintf(asmFile, "%s:\n", startLabel);
     
     // Generate code for the loop body
     if (node->for_loop.body) {
-        generateStatement(node->for_loop.body);
+        fprintf(asmFile, "    ; For loop body\n");
+        if (node->for_loop.body->type == NODE_BLOCK) {
+            generateBlock(node->for_loop.body);
+        } else {
+            generateStatement(node->for_loop.body);
+        }
     }
     
     // Generate update code

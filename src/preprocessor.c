@@ -38,8 +38,7 @@ void initPreprocessor() {
     defineMacro("__NCC__", "65536");      // Compiler ID
     defineMacro("__NCC_MAJOR__", "1");    // Major version
     defineMacro("__NCC_MINOR__", "12");   // Minor version
-    defineMacro("__FILE__", "\"main\"");  // Placeholder, will be updated
-    defineMacro("__LINE__", "1");         // Placeholder, will be updated
+    defineMacro("__x86_16__", "1");
 }
 
 // Add an include path
@@ -368,6 +367,38 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         #endif
         
         if (defined) {
+            *skipLevel = *ifLevel;  // Skip until matching endif or else
+            #ifdef DEBUG_PREPROCESSOR
+            fprintf(stderr, "  Condition false, setting skipLevel to %d\n", *skipLevel);
+            #endif
+        }
+    } 
+    else if (strncmp(line + pos, "if", 2) == 0 && isspace(line[pos+2])) {
+        // #if directive
+        pos += 2;  // Skip "if"
+        (*ifLevel)++;
+        
+        // Only evaluate condition if not already skipping
+        if (*skipLevel > 0) {
+            (*skipLevel)++;
+            #ifdef DEBUG_PREPROCESSOR
+            fprintf(stderr, "  Already in false block, increasing skipLevel to %d\n", *skipLevel);
+            #endif
+            return;
+        }
+        
+        // Skip whitespace
+        while (isspace(line[pos])) pos++;
+        
+        // Extract and evaluate the condition
+        const char* expr = line + pos;
+        int result = evaluatePreprocessorExpression(expr);
+        
+        #ifdef DEBUG_PREPROCESSOR
+        fprintf(stderr, "  #if expression evaluated to: %d\n", result);
+        #endif
+        
+        if (!result) {
             *skipLevel = *ifLevel;  // Skip until matching endif or else
             #ifdef DEBUG_PREPROCESSOR
             fprintf(stderr, "  Condition false, setting skipLevel to %d\n", *skipLevel);

@@ -91,4 +91,7 @@ ASTNode* parseBitwiseExpression();
 // Parse expressions with shift operators
 ASTNode* parseShiftExpression();
 
+// Is a type name
+int isTypeName(Token token);
+
 #endif // PARSER_H

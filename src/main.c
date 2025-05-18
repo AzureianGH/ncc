@@ -13,6 +13,7 @@ void initCodeGen(const char* outputFilename, unsigned int originAddress);
 void generateCode(ASTNode* root);
 void finalizeCodeGen();
 void printAST(ASTNode* node, int indent);
+extern void cleanupPreprocessor();
 
 void printUsage(const char* programName) {
     fprintf(stderr, "NCC: Nathan's C Compiler\n");

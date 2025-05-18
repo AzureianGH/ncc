@@ -2,6 +2,7 @@
 #include "ast.h"
 #include "string_literals.h"
 #include "error_manager.h"
+#include "global_variables.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -118,8 +119,7 @@ void initCodeGen(const char* outputFilename, unsigned int orgAddr) {
     stringLiteralCount = 0;
     stringLiterals = NULL;
     stringMarkerFound = 0;
-    
-    // Initialize array tracking
+      // Initialize array tracking
     arrayCount = 0;
     arrayNames = NULL;
     arraySizes = NULL;
@@ -132,6 +132,9 @@ void initCodeGen(const char* outputFilename, unsigned int orgAddr) {
 // Close code generator
 void finalizeCodeGen() {
     if (asmFile) {
+        // Generate any global variables that weren't emitted at a marker
+        generateRemainingGlobals(asmFile);
+        
         // Generate string literals section before closing
         generateStringLiteralsSection();
         
@@ -152,6 +155,9 @@ void finalizeCodeGen() {
         free(arrayNames);
         free(arraySizes);
         free(arrayTypes);
+        
+        // Clean up global variables
+        cleanupGlobals();
         
         fclose(asmFile);
         asmFile = NULL;
@@ -236,9 +242,7 @@ void generateCode(ASTNode* root) {
 void generateFunction(ASTNode* node) {
     if (!node || node->type != NODE_FUNCTION) return;
     
-    char* funcName = node->function.func_name;
-    
-    // Check if this is a special marker function
+    char* funcName = node->function.func_name;    // Check if this is a special marker function
     if (strcmp(funcName, "_NCC_STRING_LOC") == 0) {
         // This is where string literals should go
         generateStringsAtMarker();
@@ -254,6 +258,15 @@ void generateFunction(ASTNode* node) {
         
         // Output the naked function label but no real code
         fprintf(asmFile, "; Array location marker\n");
+        fprintf(asmFile, "_%s:\n", funcName);
+        return;
+    }
+    else if (strcmp(funcName, "_NCC_GLOBAL_LOC") == 0) {
+        // This is where global variables should go
+        generateGlobalsAtMarker(asmFile);
+        
+        // Output the naked function label but no real code
+        fprintf(asmFile, "; Global variable location marker\n");
         fprintf(asmFile, "_%s:\n", funcName);
         return;
     }
@@ -565,7 +578,9 @@ void generateVariableDeclaration(ASTNode* node) {
 
 // Generate code for global variable declaration
 void generateGlobalDeclaration(ASTNode* node) {
-    if (!node || node->type != NODE_DECLARATION) return;    // Check if this is an array with a fixed size
+    if (!node || node->type != NODE_DECLARATION) return;
+    
+    // Check if this is an array with a fixed size
     if (node->declaration.type_info.is_array && node->declaration.type_info.array_size > 0) {
         // Check if array has initializers
         if (node->declaration.initializer) {
@@ -581,54 +596,14 @@ void generateGlobalDeclaration(ASTNode* node) {
         // No code is emitted here - arrays will be generated at the marker or at the end
         return;
     }
-
-    fprintf(asmFile, "; Global variable: %s\n", node->declaration.var_name);
     
-    // Define the variable with a label
-    fprintf(asmFile, "_%s:\n", node->declaration.var_name);
-    
-    // Initialize global variables
-    if (node->declaration.initializer && node->declaration.initializer->type == NODE_LITERAL) {
-        // Literal initializer
-        switch (node->declaration.initializer->literal.data_type) {
-            case TYPE_INT:
-                fprintf(asmFile, "    dw %d ; Integer value\n\n", 
-                    node->declaration.initializer->literal.int_value);
-                break;
-            case TYPE_CHAR:
-                fprintf(asmFile, "    db '%c' ; Character value\n\n", 
-                    node->declaration.initializer->literal.char_value);
-                break;
-            case TYPE_FAR_POINTER:
-                // Far pointer is stored as offset (low word) followed by segment (high word)
-                fprintf(asmFile, "    dw %d ; Offset\n", 
-                    node->declaration.initializer->literal.offset);
-                fprintf(asmFile, "    dw %d ; Segment\n\n", 
-                    node->declaration.initializer->literal.segment);
-                break;
-            default:
-                fprintf(asmFile, "    dw 0 ; Default initialization\n\n");
-                break;
-        }
-    } else {
-        // For arrays or non-literal initializers
-        int size = 2; // Default size for integers
-        if (node->declaration.type_info.type == TYPE_CHAR || 
-            node->declaration.type_info.type == TYPE_UNSIGNED_CHAR) {
-            size = 1;
-        }
-        
-        if (node->declaration.type_info.is_array) {
-            // Array
-            fprintf(asmFile, "    times %d db 0 ; Array initialization\n\n", 
-                node->declaration.type_info.array_size * size);
-        } else {
-            // Default for other types
-            fprintf(asmFile, "    dw 0 ; Default initialization\n\n");
-        }
-    }
+    // Add global declaration to be generated at the _NCC_GLOBAL_LOC marker if present
+    addGlobalDeclaration(node);
 }
 
+
+
+// Generate all collected global variables
 // Generate code for an expression
 void generateExpression(ASTNode* node) {
     if (!node) return;
@@ -652,13 +627,16 @@ void generateExpression(ASTNode* node) {
                     fprintf(asmFile, "    ; Error processing string literal: %s\n", 
                             node->literal.string_value ? node->literal.string_value : "(null)");
                     fprintf(asmFile, "    mov ax, 0 ; Using null pointer as fallback\n");
-                }
-            } else if (node->literal.data_type == TYPE_CHAR && !node->literal.string_value) {
+                }            } else if (node->literal.data_type == TYPE_CHAR && !node->literal.string_value) {
                 // For character literals, load the ASCII value into al (8-bit)
                 // Then zero-extend to ax for consistent value handling
                 fprintf(asmFile, "    mov al, %d ; Load character value (ASCII: '%c')\n", 
                        (unsigned char)node->literal.char_value, node->literal.char_value);
                 fprintf(asmFile, "    mov ah, 0 ; Zero-extend to 16-bit\n");
+            } else if (node->literal.data_type == TYPE_BOOL) {
+                // For boolean literals, load 0 or 1 into ax
+                fprintf(asmFile, "    mov ax, %d ; Load boolean value (%s)\n", 
+                       node->literal.int_value, node->literal.int_value ? "true" : "false");
             } else {
                 // For numbers, load the value into ax
                 fprintf(asmFile, "    mov ax, %d ; Load literal\n", node->literal.int_value);
@@ -711,7 +689,44 @@ void generateExpression(ASTNode* node) {
 
 // Generate code for binary operations
 void generateBinaryOp(ASTNode* node) {
-    // Generate left operand, save result on stack
+    // Short-circuit logical operators
+    if (node->operation.op == OP_LAND) {
+        char* falseLabel = generateLabel("land_false");
+        char* endLabel = generateLabel("land_end");
+        generateExpression(node->left);
+        fprintf(asmFile, "    test ax, ax ; logical AND left test\n");
+        fprintf(asmFile, "    jz %s ; left false, skip right\n", falseLabel);
+        generateExpression(node->right);
+        fprintf(asmFile, "    test ax, ax ; logical AND right test\n");
+        fprintf(asmFile, "    jz %s ; right false, result false\n", falseLabel);
+        fprintf(asmFile, "    mov ax, 1 ; both true -> true\n");
+        fprintf(asmFile, "    jmp %s\n", endLabel);
+        fprintf(asmFile, "%s:\n", falseLabel);
+        fprintf(asmFile, "    mov ax, 0 ; false\n");
+        fprintf(asmFile, "%s:\n", endLabel);
+        free(falseLabel);
+        free(endLabel);
+        return;
+    }
+    if (node->operation.op == OP_LOR) {
+        char* trueLabel = generateLabel("lor_true");
+        char* endLabel = generateLabel("lor_end");
+        generateExpression(node->left);
+        fprintf(asmFile, "    test ax, ax ; logical OR left test\n");
+        fprintf(asmFile, "    jnz %s ; left true, result true\n", trueLabel);
+        generateExpression(node->right);
+        fprintf(asmFile, "    test ax, ax ; logical OR right test\n");
+        fprintf(asmFile, "    jnz %s ; right true -> true\n", trueLabel);
+        fprintf(asmFile, "    mov ax, 0 ; both false -> false\n");
+        fprintf(asmFile, "    jmp %s\n", endLabel);
+        fprintf(asmFile, "%s:\n", trueLabel);
+        fprintf(asmFile, "    mov ax, 1 ; true\n");
+        fprintf(asmFile, "%s:\n", endLabel);
+        free(trueLabel);
+        free(endLabel);
+        return;
+    }
+    // Generate left operand and save
     generateExpression(node->left);
     fprintf(asmFile, "    push ax ; Save left operand\n");
     
@@ -724,8 +739,8 @@ void generateBinaryOp(ASTNode* node) {
       // Perform operation based on operator type
     switch (node->operation.op) {
         case OP_ADD:
-            fprintf(asmFile, "    add ax, bx ; Addition\n");
-            break;
+             fprintf(asmFile, "    add ax, bx ; Addition\n");
+             break;
         case OP_SUB:
             fprintf(asmFile, "    sub ax, bx ; Subtraction\n");
             break;

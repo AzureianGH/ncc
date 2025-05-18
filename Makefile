@@ -32,7 +32,7 @@ clean:
 
 # Create test directory and sample test file
 test_os:
-	bin\ncc test\bootloader.c -o test\bootloader.asm
+	bin/ncc -disp 0x7C00 -I.\test .\test\bootloader.c -o .\test\bootloader.asm
 	nasm -f bin .\test\bootloader.asm -o test\bootloader.bin
 	qemu-system-x86_64 -drive format=raw,file=test\bootloader.bin
 
