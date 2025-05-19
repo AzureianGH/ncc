@@ -87,10 +87,12 @@ static int isKeyword(const char* str) {
     if (strcmp(str, "__farcalled") == 0) return TOKEN_FARCALLED;
     if (strcmp(str, "__attribute__") == 0) return TOKEN_ATTRIBUTE;
     if (strcmp(str, "naked") == 0) return TOKEN_NAKED;
-    if (strcmp(str, "deprecated") == 0) return TOKEN_DEPRECATED;
+    if (strcmp(str, "static") == 0) return TOKEN_STATIC;
+    if (strcmp(str, "deprecated") == 0) return TOKEN_DEPRECATED;    
     if (strcmp(str, "if") == 0) return TOKEN_IF;
     if (strcmp(str, "else") == 0) return TOKEN_ELSE;    
     if (strcmp(str, "while") == 0) return TOKEN_WHILE;
+    if (strcmp(str, "do") == 0) return TOKEN_DO;
     if (strcmp(str, "for") == 0) return TOKEN_FOR;
     if (strcmp(str, "return") == 0) return TOKEN_RETURN;
     if (strcmp(str, "bool") == 0) return TOKEN_BOOL;

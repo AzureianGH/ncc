@@ -30,6 +30,24 @@ void initErrorManager(const char* filename, char* source, int quiet) {
     quietMode = quiet;
 }
 
+// Get the current source filename (without path)
+const char* getCurrentSourceFilename() {
+    if (!sourceFilename)
+        return "unknown";
+    
+    // Find the last path separator
+    const char *lastSlash = strrchr(sourceFilename, '/');
+    const char *lastBackslash = strrchr(sourceFilename, '\\');
+    
+    // Use the last separator found
+    const char *lastSep = lastSlash > lastBackslash ? lastSlash : lastBackslash;
+    if (!lastSep)
+        lastSep = lastBackslash; // In case only backslash exists
+    
+    // Return the filename portion
+    return lastSep ? lastSep + 1 : sourceFilename;
+}
+
 // Find the line start position given a position in the buffer
 static const char* findLineStart(const char* buffer, int position) {
     const char* lineStart = buffer;

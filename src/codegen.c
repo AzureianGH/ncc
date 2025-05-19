@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 // External declarations from type_checker.c
 extern TypeInfo* getTypeInfo(const char* name);
@@ -302,8 +303,7 @@ void generateFunction(ASTNode* node) {
         fprintf(asmFile, "_%s:\n", funcName);
         return;
     }
-    
-    // Regular function processing
+      // Regular function processing
     // Clear any local variables from previous functions
     clearLocalVars();
     funcName = node->function.func_name;
@@ -311,7 +311,29 @@ void generateFunction(ASTNode* node) {
     currentFunctionIsNaked = node->function.info.is_naked;
     
     fprintf(asmFile, "; Function: %s\n", funcName);
-    fprintf(asmFile, "_%s:\n", funcName);  // Prepend underscore to function names
+    
+    // Handle static functions - they get a special prefix to make them file-local
+    if (node->function.info.is_static) {
+        // Get sanitized filename for prefix
+        const char* filename = getCurrentSourceFilename();
+        char* prefix = strdup(filename);
+        
+        // Remove extension and sanitize for label use
+        char* dot = strrchr(prefix, '.');
+        if (dot) *dot = '\0';
+        
+        // Replace invalid characters with underscore
+        for (char* c = prefix; *c; c++) {
+            if (!isalnum(*c) && *c != '_') {
+                *c = '_';
+            }
+        }
+        
+        fprintf(asmFile, "_%s_%s: ; static function (file-local)\n", prefix, funcName);
+        free(prefix);
+    } else {
+        fprintf(asmFile, "_%s:\n", funcName);  // Prepend underscore to function names
+    }
       // Check if this is a naked function (no prologue/epilogue)
     if (currentFunctionIsNaked) {
         fprintf(asmFile, "    ; Naked function - no prologue generated\n");
@@ -545,9 +567,12 @@ void generateStatement(ASTNode* node) {
         case NODE_FOR:
             generateForLoop(node);
             break;
-            
-        case NODE_WHILE:
+              case NODE_WHILE:
             generateWhileLoop(node);
+            break;
+            
+        case NODE_DO_WHILE:
+            generateDoWhileLoop(node);
             break;
             
         case NODE_IF:
@@ -577,11 +602,30 @@ void generateVariableDeclaration(ASTNode* node) {
                                node->declaration.type_info.type);
         }
         
-        // Set up a pointer to the array
+    // Set up a pointer to the array
         fprintf(asmFile, "    ; Array variable declaration: %s[%d]\n", 
                 node->declaration.var_name, 
                 node->declaration.type_info.array_size);
-        fprintf(asmFile, "    mov ax, _%s ; Address of array\n", node->declaration.var_name);
+                
+        // Get sanitized filename prefix
+        const char* filename = getCurrentSourceFilename();
+        char* prefix = (char*)malloc(strlen(filename) + 1);
+        if (prefix) {
+            strcpy(prefix, filename);
+            char* dot = strrchr(prefix, '.');
+            if (dot) *dot = '\0';
+            for (char* c = prefix; *c; c++) {
+                if (!isalnum(*c) && *c != '_') {
+                    *c = '_';
+                }
+            }
+            
+            fprintf(asmFile, "    mov ax, _%s_%s ; Address of array\n", 
+                    prefix, node->declaration.var_name);
+            free(prefix);
+        } else {
+            fprintf(asmFile, "    mov ax, _%s ; Address of array (fallback)\n", node->declaration.var_name);
+        }
         fprintf(asmFile, "    push ax ; Store pointer to array\n");
         
         // Add to local variable table
@@ -653,14 +697,31 @@ void generateExpression(ASTNode* node) {
                 // Load segment into dx, offset into ax for far pointers
                 fprintf(asmFile, "    mov dx, 0x%04X ; Segment\n", node->literal.segment);
                 fprintf(asmFile, "    mov ax, 0x%04X ; Offset\n", node->literal.offset);
-            } else if (node->literal.data_type == TYPE_CHAR && node->literal.string_value) {
-                // Add string to the string literals table and get its index
+            } else if (node->literal.data_type == TYPE_CHAR && node->literal.string_value) {                // Add string to the string literals table and get its index
                 int strIndex = addStringLiteral(node->literal.string_value);
                 
                 if (strIndex >= 0) {
-                    // Load the address of the string into AX
-                    fprintf(asmFile, "    ; String literal: %s\n", node->literal.string_value);
-                    fprintf(asmFile, "    mov ax, string_%d ; Address of string\n", strIndex);
+                    // Get sanitized filename prefix
+                    const char* filename = getCurrentSourceFilename();
+                    char* prefix = (char*)malloc(strlen(filename) + 1);
+                    if (prefix) {
+                        strcpy(prefix, filename);
+                        char* dot = strrchr(prefix, '.');
+                        if (dot) *dot = '\0';
+                        for (char* c = prefix; *c; c++) {
+                            if (!isalnum(*c) && *c != '_') {
+                                *c = '_';
+                            }
+                        }
+                        
+                        // Load the address of the string into AX
+                        fprintf(asmFile, "    ; String literal: %s\n", node->literal.string_value);
+                        fprintf(asmFile, "    mov ax, %s_string_%d ; Address of string\n", prefix, strIndex);
+                        free(prefix);
+                    } else {
+                        fprintf(asmFile, "    ; String literal: %s\n", node->literal.string_value);
+                        fprintf(asmFile, "    mov ax, string_%d ; Address of string (fallback)\n", strIndex);
+                    }
                 } else {
                     fprintf(asmFile, "    ; Error processing string literal: %s\n", 
                             node->literal.string_value ? node->literal.string_value : "(null)");
@@ -690,11 +751,30 @@ void generateExpression(ASTNode* node) {
             } else {
             // Local variables have negative offsets from bp
                 int varOffset = getVariableOffset(node->identifier);
-                
-                if (varOffset == 0) {
+                  if (varOffset == 0) {
                     // Could be a global variable
-                    fprintf(asmFile, "    ; Loading potentially global variable %s\n", node->identifier);
-                    fprintf(asmFile, "    mov ax, [_%s] ; Load global variable\n", node->identifier);
+                    
+                    // Get sanitized filename prefix
+                    const char* filename = getCurrentSourceFilename();
+                    char* prefix = (char*)malloc(strlen(filename) + 1);
+                    if (prefix) {
+                        strcpy(prefix, filename);
+                        char* dot = strrchr(prefix, '.');
+                        if (dot) *dot = '\0';
+                        for (char* c = prefix; *c; c++) {
+                            if (!isalnum(*c) && *c != '_') {
+                                *c = '_';
+                            }
+                        }
+                        
+                        fprintf(asmFile, "    ; Loading potentially global variable %s\n", node->identifier);
+                        fprintf(asmFile, "    mov ax, [_%s_%s] ; Load global variable\n", 
+                                prefix, node->identifier);
+                        free(prefix);
+                    } else {
+                        fprintf(asmFile, "    ; Loading potentially global variable %s\n", node->identifier);
+                        fprintf(asmFile, "    mov ax, [_%s] ; Load global variable (fallback)\n", node->identifier);
+                    }
                 } else {
                     // Ensure we use word-aligned offsets for local variables
                     fprintf(asmFile, "    mov ax, [bp-%d] ; Load local variable %s\n", 

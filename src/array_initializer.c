@@ -4,6 +4,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
+
+// External functions
+extern const char* getCurrentSourceFilename();
 
 // Reference to the output file defined in codegen.c
 extern FILE* asmFile;
@@ -16,12 +20,36 @@ void generateArrayWithInitializers(ASTNode* node) {
         fprintf(asmFile, "; DEBUG: Invalid node for array initializer\n");
         return;
     }
+      // Get sanitized filename for static array prefix
+    const char* filename = getCurrentSourceFilename();
+    char* prefix = strdup(filename);
     
+    // Remove extension and sanitize for label use
+    char* dot = strrchr(prefix, '.');
+    if (dot) *dot = '\0';
+    
+    // Replace invalid characters with underscore
+    for (char* c = prefix; *c; c++) {
+        if (!isalnum(*c) && *c != '_') {
+            *c = '_';
+        }
+    }
+
     // Output array label
-    fprintf(asmFile, "; Array with initializers: %s[%d]\n", 
-            node->declaration.var_name, 
-            node->declaration.type_info.array_size);
-    fprintf(asmFile, "_%s:\n", node->declaration.var_name);
+    if (node->declaration.type_info.is_static) {
+        fprintf(asmFile, "; Static array with initializers: %s[%d]\n", 
+                node->declaration.var_name, 
+                node->declaration.type_info.array_size);
+        fprintf(asmFile, "_%s_%s:\n", prefix, node->declaration.var_name);
+    } else {
+        fprintf(asmFile, "; Array with initializers: %s[%d]\n", 
+                node->declaration.var_name, 
+                node->declaration.type_info.array_size);
+        fprintf(asmFile, "_%s_%s:\n", prefix, node->declaration.var_name);
+    }
+    
+    // Free the prefix
+    free(prefix);
     
     // Determine directive based on element type
     const char* directive;

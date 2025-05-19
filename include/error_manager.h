@@ -4,6 +4,9 @@
 // Initialize the error manager
 void initErrorManager(const char* filename, char* source, int quiet);
 
+// Get the current source filename (without path)
+const char* getCurrentSourceFilename();
+
 // Report an error with position information
 void reportError(int position, const char* format, ...);
 

@@ -1,7 +1,7 @@
 #include "lexer.h"
 #include <stdio.h>
 
-// Function to convert token type to string representation for better error messages
+// Function         case TOKEN_XOR: return "TOKEN_XOR (^)";
 const char* getTokenName(TokenType type) {
     switch (type) {
         // Keywords
@@ -50,10 +50,11 @@ const char* getTokenName(TokenType type) {
         case TOKEN_AMPERSAND: return "TOKEN_AMPERSAND (&)";
         case TOKEN_PIPE: return "TOKEN_PIPE (|)";
         case TOKEN_INCREMENT: return "TOKEN_INCREMENT (++)";
-        case TOKEN_DECREMENT: return "TOKEN_DECREMENT (--)";
+        case TOKEN_DECREMENT: return "TOKEN_DECREMENT (--)";        
         case TOKEN_BITWISE_NOT: return "TOKEN_BITWISE_NOT (~)";
         case TOKEN_XOR: return "TOKEN_XOR (^)";
         case TOKEN_ARROW: return "TOKEN_ARROW (->)";
+        case TOKEN_QUESTION: return "TOKEN_QUESTION (?)";
         // Compound assignment operators
         case TOKEN_PLUS_ASSIGN: return "TOKEN_PLUS_ASSIGN (+=)";
         case TOKEN_MINUS_ASSIGN: return "TOKEN_MINUS_ASSIGN (-=)";

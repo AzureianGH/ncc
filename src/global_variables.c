@@ -4,11 +4,34 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 // Global variable tracking
 static int globalCount = 0;
 static ASTNode** globalDeclarations = NULL;
 static int globalMarkerFound = 0;
+
+// Helper function to get sanitized filename prefix
+static char* getSanitizedFilenamePrefix() {
+    const char* filename = getCurrentSourceFilename();
+    char* prefix = (char*)malloc(strlen(filename) + 1);
+    if (!prefix) return NULL;
+    
+    strcpy(prefix, filename);
+    
+    // Remove extension
+    char* dot = strrchr(prefix, '.');
+    if (dot) *dot = '\0';
+    
+    // Replace invalid characters with underscore
+    for (char* c = prefix; *c; c++) {
+        if (!isalnum(*c) && *c != '_') {
+            *c = '_';
+        }
+    }
+    
+    return prefix;
+}
 
 // Add a global declaration to be generated later
 void addGlobalDeclaration(ASTNode* node) {
@@ -47,20 +70,29 @@ void generateGlobalsAtMarker(FILE* asmFile) {
     
     // Mark that globals have been generated
     globalMarkerFound = 1;
+      fprintf(asmFile, "; Global variables placed at _NCC_GLOBAL_LOC\n");
     
-    fprintf(asmFile, "; Global variables placed at _NCC_GLOBAL_LOC\n");
+    // Get sanitized filename prefix
+    char* prefix = getSanitizedFilenamePrefix();
+    if (!prefix) prefix = strdup("unknown");
     
     for (int i = 0; i < globalCount; i++) {
         ASTNode* node = globalDeclarations[i];
         
-        if (node && node->type == NODE_DECLARATION) {
-            // Skip arrays - they have their own dedicated section
+        if (node && node->type == NODE_DECLARATION) {            // Skip arrays - they have their own dedicated section
             if (node->declaration.type_info.is_array) continue;
             
-            fprintf(asmFile, "; Global variable: %s\n", node->declaration.var_name);
+            // Check if this is a static global variable
+            if (node->declaration.type_info.is_static) {
+                fprintf(asmFile, "; Static global variable (file scope): %s\n", node->declaration.var_name);
+            } else {
+                fprintf(asmFile, "; Global variable (program scope): %s\n", node->declaration.var_name);
+            }
             
-            // Define the variable with a label
-            fprintf(asmFile, "_%s:\n", node->declaration.var_name);
+            // All globals already use filename prefix for uniqueness
+            // For static globals, this is required for file-local linkage
+            // For non-static globals, this helps avoid name collisions
+            fprintf(asmFile, "_%s_%s:\n", prefix, node->declaration.var_name);
             
             // Initialize global variables
             if (node->declaration.initializer && node->declaration.initializer->type == NODE_LITERAL) {
@@ -102,10 +134,12 @@ void generateGlobalsAtMarker(FILE* asmFile) {
                     fprintf(asmFile, "    dw 0 ; Segment (zero initialization)\n\n");
                 } else {
                     fprintf(asmFile, "    dw 0 ; Zero initialization\n\n");
-                }
-            }
+                }            }
         }
     }
+    
+    // Free the prefix
+    free(prefix);
 }
 
 // Generate any remaining globals that weren't emitted at a marker

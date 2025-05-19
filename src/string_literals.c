@@ -1,8 +1,10 @@
 #include "codegen.h"
 #include "ast.h"
+#include "error_manager.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 
 // Globals from codegen.c
 extern FILE* asmFile;
@@ -18,6 +20,28 @@ extern DataType* arrayTypes;
 // Has the string/array marker been found?
 extern int stringMarkerFound;
 extern int arrayMarkerFound;
+
+// Function to sanitize filename for use as identifier prefix
+char* getSanitizedFilenamePrefix() {
+    const char* filename = getCurrentSourceFilename();
+    char* prefix = (char*)malloc(strlen(filename) + 1);
+    if (!prefix) return NULL;
+    
+    strcpy(prefix, filename);
+    
+    // Remove extension
+    char* dot = strrchr(prefix, '.');
+    if (dot) *dot = '\0';
+    
+    // Replace invalid characters with underscore
+    for (char* c = prefix; *c; c++) {
+        if (!isalnum(*c) && *c != '_') {
+            *c = '_';
+        }
+    }
+    
+    return prefix;
+}
 
 // Function to escape string for assembly
 char* escapeStringForAsm(const char* input) {
@@ -171,11 +195,14 @@ void generateStringsAtMarker() {
     
     // Mark that strings have been generated
     stringMarkerFound = 1;
+      fprintf(asmFile, "; String literals placed at _NCC_STRING_LOC\n");
     
-    fprintf(asmFile, "; String literals placed at _NCC_STRING_LOC\n");
+    // Get sanitized filename prefix
+    char* prefix = getSanitizedFilenamePrefix();
+    if (!prefix) prefix = strdup("unknown");
     
     for (int i = 0; i < stringLiteralCount; i++) {
-        fprintf(asmFile, "string_%d: db ", i);
+        fprintf(asmFile, "%s_string_%d: db ", prefix, i);
         
         // Output each byte of the string as a decimal value
         size_t len = strlen(stringLiterals[i]);
@@ -183,10 +210,12 @@ void generateStringsAtMarker() {
             fprintf(asmFile, "%d", (unsigned char)stringLiterals[i][j]);
             if (j < len - 1) {
                 fprintf(asmFile, ", ");
-            }
-        }
+            }        }
         fprintf(asmFile, ", 0  ; null terminator\n");
     }
+    
+    // Free the prefix
+    free(prefix);
 }
 
 // Forward declaration
@@ -198,11 +227,14 @@ void generateArraysAtMarker() {
     if (arrayMarkerFound || arrayCount == 0) return;
       // Mark that arrays have been generated
     arrayMarkerFound = 1;
+      fprintf(asmFile, "; Array declarations placed at _NCC_ARRAY_LOC\n");
     
-    fprintf(asmFile, "; Array declarations placed at _NCC_ARRAY_LOC\n");
+    // Get sanitized filename prefix
+    char* prefix = getSanitizedFilenamePrefix();
+    if (!prefix) prefix = strdup("unknown");
     
     for (int i = 0; i < arrayCount; i++) {
-        fprintf(asmFile, "_%s: ", arrayNames[i]);
+        fprintf(asmFile, "_%s_%s: ", prefix, arrayNames[i]);
         
         // Determine element size and directive
         const char* directive;
@@ -236,11 +268,14 @@ void generateStringLiteralsSection() {
     fprintf(asmFile, "\n; Data section for strings and arrays\n");
     
     // Generate string literals if not already done
-    if (!stringMarkerFound && stringLiteralCount > 0) {
-        fprintf(asmFile, "; String literals section\n");
+    if (!stringMarkerFound && stringLiteralCount > 0) {        fprintf(asmFile, "; String literals section\n");
+        
+        // Get sanitized filename prefix
+        char* prefix = getSanitizedFilenamePrefix();
+        if (!prefix) prefix = strdup("unknown");
         
         for (int i = 0; i < stringLiteralCount; i++) {
-            fprintf(asmFile, "string_%d: db ", i);
+            fprintf(asmFile, "%s_string_%d: db ", prefix, i);
             
             // Output each byte of the string as a decimal value
             size_t len = strlen(stringLiterals[i]);
@@ -248,17 +283,23 @@ void generateStringLiteralsSection() {
                 fprintf(asmFile, "%d", (unsigned char)stringLiterals[i][j]);
                 if (j < len - 1) {
                     fprintf(asmFile, ", ");
-                }
-            }
+                }            }
             fprintf(asmFile, ", 0  ; null terminator\n");
         }
+        
+        // Free the prefix
+        free(prefix);
     }
     
     // Generate array declarations if not already done
-    if (!arrayMarkerFound && arrayCount > 0) {
-        fprintf(asmFile, "\n; Array declarations section\n");
+    if (!arrayMarkerFound && arrayCount > 0) {        fprintf(asmFile, "\n; Array declarations section\n");
+        
+        // Get sanitized filename prefix
+        char* prefix = getSanitizedFilenamePrefix();
+        if (!prefix) prefix = strdup("unknown");
+        
         for (int i = 0; i < arrayCount; i++) {
-            fprintf(asmFile, "_%s: ", arrayNames[i]);
+            fprintf(asmFile, "_%s_%s: ", prefix, arrayNames[i]);
               // Determine element size and directive
             const char* directive;
             int elementSize;
@@ -277,8 +318,10 @@ void generateStringLiteralsSection() {
             }
             
             // Output array declaration with zeros
-            fprintf(asmFile, "times %d %s 0 ; Array of %d bytes\n", 
-                    arraySizes[i], directive, arraySizes[i] * elementSize);
+            fprintf(asmFile, "times %d %s 0 ; Array of %d bytes\n",                arraySizes[i], directive, arraySizes[i] * elementSize);
         }
+        
+        // Free the prefix
+        free(prefix);
     }
 }
