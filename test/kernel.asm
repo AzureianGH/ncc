@@ -9,16 +9,46 @@ __after_diskload:
 
     ; Function call to clearScreen
     call _clearScreen
+    ; Function call to enterVGAGraphicsMode
+    call _enterVGAGraphicsMode
+    ; Function call to clearGraphics
+    mov ax, 1 ; Load literal
+    push ax ; Argument 1
+    call _clearGraphics
+    add sp, 2 ; Remove arguments
+    ; Function call to haltForever
+    call _haltForever
+
+__after_diskload_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: assert
+_assert:
+    push bp
+    mov bp, sp
+
+    ; If statement
+    mov ax, [bp+4] ; Load parameter condition
+    test ax, ax ; Test if AX is zero
+    setz al ; Set AL to 1 if AX is zero, 0 otherwise
+    movzx ax, al ; Zero-extend AL to AX
+    test ax, ax
+    jz if_end1
+    ; If true branch
     ; Function call to writeString
-    ; String literal: Hello, World!\r\n
+    ; String literal: Assertion failed!\r\n
     mov ax, kernel_string_0 ; Address of string
     push ax ; Argument 1
     call _writeString
     add sp, 2 ; Remove arguments
     ; Function call to haltForever
     call _haltForever
+if_end1:
 
-__after_diskload_exit:
+_assert_exit:
     ; Standard function epilogue
     mov sp, bp
     pop bp
@@ -79,22 +109,22 @@ _writeString:
     mov bp, sp
 
     ; While loop
-while_cond0:
+while_cond2:
     mov ax, [bp+4] ; Load parameter str
     ; Dereferencing pointer
     mov bx, ax ; Move pointer address to BX
     cmp bx, 0 ; Check for null pointer
-    je null_ptr_deref_3
+    je null_ptr_deref_5
     xor ah, ah ; Clear high byte for char
     mov al, [bx] ; Load byte (char) from memory
-    jmp ptr_deref_end_3
-null_ptr_deref_3:
+    jmp ptr_deref_end_5
+null_ptr_deref_5:
     ; Null pointer dereference detected
     mov ax, 0 ; Return 0 for null deref
-ptr_deref_end_3:
+ptr_deref_end_5:
     test ax, ax
-    jz while_end2
-while_body1:
+    jz while_end4
+while_body3:
     ; Loop body
     ; Function call to writeChar
     ; Postfix increment of parameter str
@@ -105,20 +135,64 @@ while_body1:
     ; Dereferencing pointer
     mov bx, ax ; Move address to BX
     cmp bx, 0 ; Check for null pointer
-    je null_ptr_deref_4
+    je null_ptr_deref_6
     mov ax, [bx] ; Load word from memory
-    jmp ptr_deref_end_4
-null_ptr_deref_4:
+    jmp ptr_deref_end_6
+null_ptr_deref_6:
     ; Null pointer dereference detected
     mov ax, 0 ; Return 0 for null deref
-ptr_deref_end_4:
+ptr_deref_end_6:
     push ax ; Argument 1
     call _writeChar
     add sp, 2 ; Remove arguments
-    jmp while_cond0
-while_end2:
+    jmp while_cond2
+while_end4:
 
 _writeString_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: enterVGAGraphicsMode
+_enterVGAGraphicsMode:
+    push bp
+    mov bp, sp
+
+    ; Inline assembly statement
+    mov ax, 0x0013
+    ; Inline assembly statement
+    int 0x10
+
+_enterVGAGraphicsMode_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: clearGraphics
+_clearGraphics:
+    push bp
+    mov bp, sp
+
+    ; Inline assembly statement
+    mov ax, 0xA000
+    ; Inline assembly statement
+    mov es, ax
+    ; Inline assembly statement
+    xor di, di
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov ax, [bp+4] ; Load parameter color
+    mov cx, byte ax
+    ; Inline assembly statement
+    mov ax, cx
+    ; Inline assembly statement
+    mov cx, 64000
+    ; Inline assembly statement
+    rep stosb
+
+_clearGraphics_exit:
     ; Standard function epilogue
     mov sp, bp
     pop bp
@@ -127,4 +201,4 @@ _writeString_exit:
 
 ; Data section for strings and arrays
 ; String literals section
-kernel_string_0: db 72, 101, 108, 108, 111, 44, 32, 87, 111, 114, 108, 100, 33, 13, 10, 0  ; null terminator
+kernel_string_0: db 65, 115, 115, 101, 114, 116, 105, 111, 110, 32, 102, 97, 105, 108, 101, 100, 33, 13, 10, 0  ; null terminator

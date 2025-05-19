@@ -159,10 +159,12 @@ typedef struct ASTNode {
         struct {
             char* code;
         } asm_block;
-        
-        // For inline assembly statement
+          // For inline assembly statement
         struct {
-            char* code;
+            char* code;               // The assembly instruction template
+            struct ASTNode** operands; // Array of operand expressions
+            char** constraints;        // Array of constraint strings (e.g., "r", "m")
+            int operand_count;         // Number of operands
         } asm_stmt;
         
         // For function calls

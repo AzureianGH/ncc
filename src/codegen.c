@@ -1212,5 +1212,100 @@ void generateAsmStmt(ASTNode* node) {
     if (!node || node->type != NODE_ASM || !node->asm_stmt.code) return;
     
     fprintf(asmFile, "    ; Inline assembly statement\n");
-    fprintf(asmFile, "    %s\n", node->asm_stmt.code);
+    
+    // If there are no operands, just output the code directly
+    if (node->asm_stmt.operand_count == 0) {
+        fprintf(asmFile, "    %s\n", node->asm_stmt.code);
+        return;
+    }
+    
+    // With operands, we need to:
+    // 1. First generate code to load the operands into registers
+    // 2. Substitute %0, %1, etc. with appropriate register names
+    fprintf(asmFile, "    ; Inline assembly with %d operands\n", node->asm_stmt.operand_count);
+    
+    // Array to store register assignments for each operand
+    char** registers = (char**)malloc(sizeof(char*) * node->asm_stmt.operand_count);
+    if (!registers) {
+        fprintf(stderr, "Memory allocation failed for assembly registers\n");
+        return;
+    }
+    
+    // Commonly used registers based on constraint type
+    const char* reg_choices[] = {"ax", "bx", "cx", "dx", "si", "di"};
+    int reg_index = 0;
+    
+    // Process operands and assign registers
+    for (int i = 0; i < node->asm_stmt.operand_count; i++) {
+        // Generate code to evaluate the operand
+        generateExpression(node->asm_stmt.operands[i]);
+        
+        // Check constraint type
+        char* constraint = node->asm_stmt.constraints[i];
+        if (constraint[0] == 'r') {
+            // Register constraint: assign a register
+            if (reg_index < 6) {
+                registers[i] = strdup(reg_choices[reg_index++]);
+            } else {
+                // Run out of preferred registers, just use ax
+                registers[i] = strdup("ax");
+            }
+            
+            // Move result to the assigned register if it's not already in ax
+            if (strcmp(registers[i], "ax") != 0) {
+                fprintf(asmFile, "    mov %s, ax ; Load operand %d into register\n", 
+                        registers[i], i);
+            }
+        } else {
+            // Default to ax for unknown constraints
+            registers[i] = strdup("ax");
+        }
+    }
+    
+    // Now process the assembly code string, replacing %0, %1, etc.
+    char* asmCode = strdup(node->asm_stmt.code);
+    char* result = (char*)malloc(strlen(asmCode) * 2); // Allocate double space for substitutions
+    if (!result) {
+        fprintf(stderr, "Memory allocation failed for assembly code processing\n");
+        free(asmCode);
+        for (int i = 0; i < node->asm_stmt.operand_count; i++) {
+            free(registers[i]);
+        }
+        free(registers);
+        return;
+    }
+    
+    result[0] = '\0';
+    
+    // Process the string, replacing %0, %1, etc. with register names
+    char* p = asmCode;
+    while (*p) {
+        if (*p == '%' && *(p+1) >= '0' && *(p+1) <= '9') {
+            int operand_num = *(p+1) - '0';
+            if (operand_num < node->asm_stmt.operand_count) {
+                strcat(result, registers[operand_num]);
+                p += 2;
+            } else {
+                // Invalid operand number, just copy the %
+                char tmp[2] = {*p, '\0'};
+                strcat(result, tmp);
+                p++;
+            }
+        } else {
+            char tmp[2] = {*p, '\0'};
+            strcat(result, tmp);
+            p++;
+        }
+    }
+    
+    // Output the processed assembly code
+    fprintf(asmFile, "    %s\n", result);
+    
+    // Clean up
+    free(asmCode);
+    free(result);
+    for (int i = 0; i < node->asm_stmt.operand_count; i++) {
+        free(registers[i]);
+    }
+    free(registers);
 }

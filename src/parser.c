@@ -378,14 +378,87 @@ ASTNode* parseInlineAssembly() {
     expect(TOKEN_ASM); // Assuming TOKEN_ASM is the token for __asm
 
     ASTNode* node = createNode(NODE_ASM);
+    
+    // Initialize operand-related fields
+    node->asm_stmt.operands = NULL;
+    node->asm_stmt.constraints = NULL;
+    node->asm_stmt.operand_count = 0;
 
     // Expect an opening parenthesis for inline assembly syntax: __asm("...")
-    expect(TOKEN_LPAREN);    if (!tokenIs(TOKEN_STRING)) {
+    expect(TOKEN_LPAREN);
+    
+    if (!tokenIs(TOKEN_STRING)) {
         Token token = getCurrentToken();
         reportError(token.pos, "Expected string literal in __asm statement");
         exit(1);
-    }node->asm_stmt.code = strdup(getCurrentToken().value);
+    }
+    
+    node->asm_stmt.code = strdup(getCurrentToken().value);
     consume(TOKEN_STRING);
+    
+    // Check for extended syntax with colons for operands: __asm("instr %0" : : "r"(var))
+    if (tokenIs(TOKEN_COLON)) {
+        consume(TOKEN_COLON); // Consume first colon (output operands, not supported yet)
+        
+        // Check for second colon (input operands)
+        if (tokenIs(TOKEN_COLON)) {
+            consume(TOKEN_COLON);
+            
+            // Allocate initial space for operands and constraints
+            node->asm_stmt.operand_count = 0;
+            node->asm_stmt.operands = (ASTNode**)malloc(sizeof(ASTNode*) * 8); // Start with space for 8 operands
+            node->asm_stmt.constraints = (char**)malloc(sizeof(char*) * 8);
+            
+            if (!node->asm_stmt.operands || !node->asm_stmt.constraints) {
+                reportError(getCurrentToken().pos, "Memory allocation failed for assembly operands");
+                exit(1);
+            }
+            
+            // Parse operands until the closing parenthesis
+            while (!tokenIs(TOKEN_RPAREN)) {
+                // Skip optional commas between operands
+                if (tokenIs(TOKEN_COMMA)) {
+                    consume(TOKEN_COMMA);
+                }
+                
+                // Check if we've reached the end of operands
+                if (tokenIs(TOKEN_RPAREN)) {
+                    break;
+                }
+                
+                // Parse constraint string: "r", "m", etc.
+                if (!tokenIs(TOKEN_STRING)) {
+                    Token token = getCurrentToken();
+                    reportError(token.pos, "Expected constraint string for assembly operand");
+                    exit(1);
+                }
+                
+                // Store the constraint
+                node->asm_stmt.constraints[node->asm_stmt.operand_count] = strdup(getCurrentToken().value);
+                consume(TOKEN_STRING);
+                
+                // Parse operand expression: (variable)
+                expect(TOKEN_LPAREN);
+                node->asm_stmt.operands[node->asm_stmt.operand_count] = parseExpression();
+                expect(TOKEN_RPAREN);
+                
+                // Increment operand count
+                node->asm_stmt.operand_count++;
+                
+                // Resize arrays if needed
+                if (node->asm_stmt.operand_count % 8 == 0) {
+                    int new_size = node->asm_stmt.operand_count + 8;
+                    node->asm_stmt.operands = (ASTNode**)realloc(node->asm_stmt.operands, sizeof(ASTNode*) * new_size);
+                    node->asm_stmt.constraints = (char**)realloc(node->asm_stmt.constraints, sizeof(char*) * new_size);
+                    
+                    if (!node->asm_stmt.operands || !node->asm_stmt.constraints) {
+                        reportError(getCurrentToken().pos, "Memory allocation failed for assembly operands");
+                        exit(1);
+                    }
+                }
+            }
+        }
+    }
 
     expect(TOKEN_RPAREN);
     expect(TOKEN_SEMICOLON); // __asm("...");
