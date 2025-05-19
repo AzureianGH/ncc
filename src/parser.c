@@ -498,9 +498,32 @@ ASTNode* parseAsmBlock() {
 
 
 
+// Parse a comma expression (expr, expr, expr)
+ASTNode* parseCommaExpression() {
+    ASTNode* left = parseAssignmentExpression();
+    
+    while (tokenIs(TOKEN_COMMA)) {
+        consume(TOKEN_COMMA);
+        
+        // For comma operator, create a binary op node
+        ASTNode* right = parseAssignmentExpression();
+        
+        // Create a special binary operation for comma operator
+        // The result is the value of the right operand
+        ASTNode* node = createNode(NODE_BINARY_OP);
+        node->operation.op = OP_COMMA;  // We'll add this to the enum
+        node->left = left;   // Left operand is evaluated first
+        node->right = right; // Right operand's value becomes the result
+        
+        left = node;
+    }
+    
+    return left;
+}
+
 // Parse an expression
 ASTNode* parseExpression() {
-    return parseAssignmentExpression();
+    return parseCommaExpression();
 }
 
 // Parse a relational expression
@@ -576,9 +599,35 @@ ASTNode* parseLogicalOrExpression() {
     return left;
 }
 
+// Parse a ternary conditional expression (condition ? true_expr : false_expr)
+ASTNode* parseTernaryExpression() {
+    ASTNode* condition = parseLogicalOrExpression();
+    
+    if (tokenIs(TOKEN_QUESTION)) {
+        consume(TOKEN_QUESTION);
+        
+        // Create a ternary operation node
+        ASTNode* node = createNode(NODE_TERNARY);
+        node->ternary.condition = condition;
+        
+        // Parse the expression for the true case, can include comma expressions
+        node->ternary.true_expr = parseCommaExpression();
+        
+        // Expect a colon separating the true and false expressions
+        expect(TOKEN_COLON);
+        
+        // Parse the expression for the false case, can include comma expressions
+        node->ternary.false_expr = parseCommaExpression();
+        
+        return node;
+    }
+    
+    return condition;
+}
+
 // Parse an assignment expression
 ASTNode* parseAssignmentExpression() {
-    ASTNode* left = parseLogicalOrExpression();
+    ASTNode* left = parseTernaryExpression();
 
     if (tokenIs(TOKEN_ASSIGN) || tokenIs(TOKEN_PLUS_ASSIGN) || tokenIs(TOKEN_MINUS_ASSIGN) ||
         tokenIs(TOKEN_MUL_ASSIGN) || tokenIs(TOKEN_DIV_ASSIGN) || tokenIs(TOKEN_MOD_ASSIGN)) {

@@ -16,6 +16,7 @@
         "stdlib.h": "c",
         "typeinfo.h": "c",
         "error_manager.h": "c",
-        "ast.h": "c"
+        "ast.h": "c",
+        "limits": "c"
     }
 }

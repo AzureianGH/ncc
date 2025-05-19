@@ -19,6 +19,9 @@ int isGlobalMarkerFound();
 // Mark that the global variables were generated
 void setGlobalMarkerFound(int found);
 
+// Mark the current index as the starting point for redefined globals
+void markRedefineGlobalsStart();
+
 // Free allocated memory
 void cleanupGlobals();
 

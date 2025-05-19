@@ -188,21 +188,41 @@ int addArrayDeclaration(const char* name, int size, DataType type) {
     return arrayCount++;
 }
 
+char** existingStrings = NULL;
+
 // Generate string literals at specific location (after marker function)
 void generateStringsAtMarker() {
-    // Skip if no strings to generate or already generated
-    if (stringMarkerFound || stringLiteralCount == 0) return;
+    // Get access to the redefine flag from codegen.c
+    extern int redefineLocalsFound;
+    extern int redefineStringStartIndex;
+    
+    // Count how many strings already exist
+    int existingCount = 0;
+    if (existingStrings) {
+        while (existingStrings[existingCount] != NULL) {
+            existingCount++;
+        }
+    }
+
+    // Skip if strings were already generated and we're not redefining locations
+    if ((stringMarkerFound && !redefineLocalsFound) || stringLiteralCount == 0) return;
     
     // Mark that strings have been generated
     stringMarkerFound = 1;
-      fprintf(asmFile, "; String literals placed at _NCC_STRING_LOC\n");
+    
+    fprintf(asmFile, "; String literals placed at _NCC_STRING_LOC%s\n", 
+            redefineLocalsFound ? " (redefined)" : "");
     
     // Get sanitized filename prefix
     char* prefix = getSanitizedFilenamePrefix();
     if (!prefix) prefix = strdup("unknown");
     
-    for (int i = 0; i < stringLiteralCount; i++) {
-        fprintf(asmFile, "%s_string_%d: db ", prefix, i);
+    // If redefining, only generate strings added after the redefine marker
+    int startIdx = redefineLocalsFound ? redefineStringStartIndex : 0;
+    
+    for (int i = startIdx; i < stringLiteralCount; i++) {
+        // Offset the index by the number of already existing strings
+        fprintf(asmFile, "%s_string_%d: db ", prefix, existingCount + (i - startIdx));
         
         // Output each byte of the string as a decimal value
         size_t len = strlen(stringLiterals[i]);
@@ -210,12 +230,13 @@ void generateStringsAtMarker() {
             fprintf(asmFile, "%d", (unsigned char)stringLiterals[i][j]);
             if (j < len - 1) {
                 fprintf(asmFile, ", ");
-            }        }
+            }
+        }
         fprintf(asmFile, ", 0  ; null terminator\n");
     }
     
-    // Free the prefix
     free(prefix);
+    fprintf(asmFile, "; String literal location marker%s\n", redefineLocalsFound ? " (redefined)" : "");
 }
 
 // Forward declaration
@@ -223,17 +244,27 @@ extern void generateArrayWithInitializers(ASTNode* node);
 
 // Generate array declarations at specific location (after marker function)
 void generateArraysAtMarker() {
-    // Skip if no arrays to generate or already generated
-    if (arrayMarkerFound || arrayCount == 0) return;
-      // Mark that arrays have been generated
+    // Get access to the redefine flag from codegen.c
+    extern int redefineLocalsFound;
+    extern int redefineArrayStartIndex;
+    
+    // Skip if arrays were already generated and we're not redefining locations
+    if ((arrayMarkerFound && !redefineLocalsFound) || arrayCount == 0) return;
+      
+    // Mark that arrays have been generated
     arrayMarkerFound = 1;
-      fprintf(asmFile, "; Array declarations placed at _NCC_ARRAY_LOC\n");
+      
+    fprintf(asmFile, "; Array declarations placed at _NCC_ARRAY_LOC%s\n",
+            redefineLocalsFound ? " (redefined)" : "");
     
     // Get sanitized filename prefix
     char* prefix = getSanitizedFilenamePrefix();
     if (!prefix) prefix = strdup("unknown");
     
-    for (int i = 0; i < arrayCount; i++) {
+    // Determine starting index based on whether we're redefining
+    int startIdx = redefineLocalsFound ? redefineArrayStartIndex : 0;
+    
+    for (int i = startIdx; i < arrayCount; i++) {
         fprintf(asmFile, "_%s_%s: ", prefix, arrayNames[i]);
         
         // Determine element size and directive
