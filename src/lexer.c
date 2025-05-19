@@ -327,9 +327,14 @@ Token getNextToken() {
             token.type = TOKEN_SEMICOLON;
             position++;
             column++;
-            break;
+            break;        
         case ':':
             token.type = TOKEN_COLON;
+            position++;
+            column++;
+            break;
+        case '?':
+            token.type = TOKEN_QUESTION;
             position++;
             column++;
             break;

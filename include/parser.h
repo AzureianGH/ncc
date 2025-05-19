@@ -52,8 +52,14 @@ ASTNode* parseAsmBlock();
 // Parse an expression
 ASTNode* parseExpression();
 
+// Parse a comma expression
+ASTNode* parseCommaExpression();
+
 // Parse an assignment expression
 ASTNode* parseAssignmentExpression();
+
+// Parse a ternary conditional expression
+ASTNode* parseTernaryExpression();
 
 // Parse a logical OR expression
 ASTNode* parseLogicalOrExpression();

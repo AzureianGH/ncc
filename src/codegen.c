@@ -19,16 +19,24 @@ FILE* asmFile = NULL;
 // String literals table
 int stringLiteralCount = 0;
 char** stringLiterals = NULL;
+// Track where the redefined strings start
+int redefineStringStartIndex = 0;
 
 // Array declarations table
 int arrayCount = 0;
 char** arrayNames = NULL;
 int* arraySizes = NULL;
 DataType* arrayTypes = NULL;
+// Track where the redefined arrays start
+int redefineArrayStartIndex = 0;
 
 // Flags to track if marker functions were found
 int stringMarkerFound = 0;
 int arrayMarkerFound = 0;
+int globalMarkerFound = 0;
+
+// Flag to track if the location should be redefined (when __NCC_REDEFINE_LOCALS is defined)
+int redefineLocalsFound = 0;
 
 // Label counter for unique labels
 int labelCounter = 0;
@@ -125,12 +133,21 @@ void initCodeGen(const char* outputFilename, unsigned int orgAddr) {
     stringLiteralCount = 0;
     stringLiterals = NULL;
     stringMarkerFound = 0;
-      // Initialize array tracking
+    redefineStringStartIndex = 0;
+      
+    // Initialize array tracking
     arrayCount = 0;
     arrayNames = NULL;
     arraySizes = NULL;
     arrayTypes = NULL;
     arrayMarkerFound = 0;
+    redefineArrayStartIndex = 0;
+    
+    // Initialize redefine locals flag
+    redefineLocalsFound = 0;
+    
+    // Initialize global marker
+    globalMarkerFound = 0;
     
     originAddress = orgAddr;
 }
@@ -216,6 +233,7 @@ void generateStatement(ASTNode* node);
 void generateVariableDeclaration(ASTNode* node);
 void generateExpression(ASTNode* node);
 void generateBinaryOp(ASTNode* node);
+void generateTernaryExpression(ASTNode* node);
 void generateReturnStatement(ASTNode* node);
 void generateFunctionCall(ASTNode* node);
 void generateAsmBlock(ASTNode* node);
@@ -271,36 +289,69 @@ void generateCode(ASTNode* root) {
     }
 }
 
+// Forward declaration from preprocessor.h
+extern int isMacroDefined(const char* name);
+
 // Generate code for a function
 void generateFunction(ASTNode* node) {
     if (!node || node->type != NODE_FUNCTION) return;
     
-    char* funcName = node->function.func_name;    // Check if this is a special marker function
+    char* funcName = node->function.func_name;
+    
+    // Check if we need to redefine locals flag
+    if (isMacroDefined("__NCC_REDEFINE_LOCALS") && !redefineLocalsFound) {
+        // Found the directive, so we need to reset markers to allow redefinition
+        redefineLocalsFound = 1;
+        stringMarkerFound = 0;
+        arrayMarkerFound = 0;
+        globalMarkerFound = 0;
+        
+        // Mark the current indices as the starting points for redefinition
+        redefineStringStartIndex = stringLiteralCount;
+        redefineArrayStartIndex = arrayCount;
+        markRedefineGlobalsStart(); // Mark global start index
+        
+        fprintf(asmFile, "; Detected __NCC_REDEFINE_LOCALS - marker locations will be updated\n");
+    }
+    
+    // Check if this is a special marker function
     if (strcmp(funcName, "_NCC_STRING_LOC") == 0) {
         // This is where string literals should go
         generateStringsAtMarker();
         
-        // Output the naked function label but no real code
-        fprintf(asmFile, "; String literal location marker\n");
-        fprintf(asmFile, "_%s:\n", funcName);
+        // Output only a comment for the marker when redefining locations
+        if (!redefineLocalsFound) {
+            fprintf(asmFile, "; String literal location marker\n");
+            fprintf(asmFile, "_%s:\n", funcName);
+        } else {
+            fprintf(asmFile, "; String literal location marker (redefined)\n");
+        }
         return;
     }
     else if (strcmp(funcName, "_NCC_ARRAY_LOC") == 0) {
         // This is where arrays should go
         generateArraysAtMarker();
         
-        // Output the naked function label but no real code
-        fprintf(asmFile, "; Array location marker\n");
-        fprintf(asmFile, "_%s:\n", funcName);
+        // Output only a comment for the marker when redefining locations
+        if (!redefineLocalsFound) {
+            fprintf(asmFile, "; Array location marker\n");
+            fprintf(asmFile, "_%s:\n", funcName);
+        } else {
+            fprintf(asmFile, "; Array location marker (redefined)\n");
+        }
         return;
     }
     else if (strcmp(funcName, "_NCC_GLOBAL_LOC") == 0) {
         // This is where global variables should go
         generateGlobalsAtMarker(asmFile);
         
-        // Output the naked function label but no real code
-        fprintf(asmFile, "; Global variable location marker\n");
-        fprintf(asmFile, "_%s:\n", funcName);
+        // Output only a comment for the marker when redefining locations
+        if (!redefineLocalsFound) {
+            fprintf(asmFile, "; Global variable location marker\n");
+            fprintf(asmFile, "_%s:\n", funcName);
+        } else {
+            fprintf(asmFile, "; Global variable location marker (redefined)\n");
+        }
         return;
     }
       // Regular function processing
@@ -786,10 +837,14 @@ void generateExpression(ASTNode* node) {
             // Generate code for binary operation
             generateBinaryOp(node);
             break;
-            
-        case NODE_UNARY_OP:
+              case NODE_UNARY_OP:
             // Generate code for unary operation
             generateUnaryOp(node);
+            break;
+            
+        case NODE_TERNARY:
+            // Generate code for ternary conditional expression
+            generateTernaryExpression(node);
             break;
             
         case NODE_CALL:
@@ -1007,15 +1062,61 @@ void generateBinaryOp(ASTNode* node) {
             fprintf(asmFile, "    mov cx, bx ; Set shift count in CX\n");
             fprintf(asmFile, "    shl ax, cl ; Shift left\n");
             break;
-            
-        case OP_RIGHT_SHIFT:
+              case OP_RIGHT_SHIFT:
             fprintf(asmFile, "    mov cx, bx ; Set shift count in CX\n");
             fprintf(asmFile, "    sar ax, cl ; Shift right (arithmetic, preserves sign)\n");
             break;
-              default:
+            
+        case OP_COMMA:
+            // For comma operator, left operand is already evaluated (result discarded)
+            // and its value is in AX. Now evaluate right operand and its result becomes
+            // the overall result.
+            fprintf(asmFile, "    ; Comma operator - left operand already evaluated\n");
+            fprintf(asmFile, "    ; The right operand's value becomes the result\n");
+            generateExpression(node->right);
+            break;
+            
+        default:
             reportWarning(-1, "Unsupported binary operator: %d", node->operation.op);
             break;
     }
+}
+
+// Generate code for a ternary conditional expression
+void generateTernaryExpression(ASTNode* node) {
+    if (!node || node->type != NODE_TERNARY) return;
+    
+    // Generate unique labels
+    char* falseLabel = generateLabel("ternary_false");
+    char* endLabel = generateLabel("ternary_end");
+    
+    fprintf(asmFile, "    ; Ternary conditional expression (condition ? true_expr : false_expr)\n");
+    
+    // Generate condition
+    generateExpression(node->ternary.condition);
+    
+    // Test the condition, if false jump to false branch
+    fprintf(asmFile, "    test ax, ax ; Test condition result\n");
+    fprintf(asmFile, "    jz %s ; Jump to false branch if condition is false\n", falseLabel);
+    
+    // Generate true expression
+    generateExpression(node->ternary.true_expr);
+    
+    // Jump to end (skip false expression)
+    fprintf(asmFile, "    jmp %s ; Skip false branch\n", endLabel);
+    
+    // False branch
+    fprintf(asmFile, "%s: ; False branch\n", falseLabel);
+    
+    // Generate false expression
+    generateExpression(node->ternary.false_expr);
+    
+    // End label
+    fprintf(asmFile, "%s: ; End of ternary expression\n", endLabel);
+    
+    // Free the allocated labels
+    free(falseLabel);
+    free(endLabel);
 }
 
 // Generate code for a function call

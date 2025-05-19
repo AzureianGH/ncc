@@ -9,7 +9,8 @@
 // Global variable tracking
 static int globalCount = 0;
 static ASTNode** globalDeclarations = NULL;
-static int globalMarkerFound = 0;
+extern int globalMarkerFound; // Made non-static for access from codegen.c
+static int redefineGlobalStartIndex = 0; // Track where redefined globals start
 
 // Helper function to get sanitized filename prefix
 static char* getSanitizedFilenamePrefix() {
@@ -58,6 +59,11 @@ int isGlobalMarkerFound() {
     return globalMarkerFound;
 }
 
+// Mark the current index as the starting point for redefined globals
+void markRedefineGlobalsStart() {
+    redefineGlobalStartIndex = globalCount;
+}
+
 // Mark that the global variables were generated
 void setGlobalMarkerFound(int found) {
     globalMarkerFound = found;
@@ -65,21 +71,30 @@ void setGlobalMarkerFound(int found) {
 
 // Generate all collected global variables
 void generateGlobalsAtMarker(FILE* asmFile) {
-    // Skip if no globals to generate or already generated
-    if (globalMarkerFound || globalCount == 0) return;
+    // Get access to the redefine flag from codegen.c
+    extern int redefineLocalsFound;
+    
+    // Skip if globals were already generated and we're not redefining locations
+    if ((globalMarkerFound && !redefineLocalsFound) || globalCount == 0) return;
     
     // Mark that globals have been generated
     globalMarkerFound = 1;
-      fprintf(asmFile, "; Global variables placed at _NCC_GLOBAL_LOC\n");
+      
+    fprintf(asmFile, "; Global variables placed at _NCC_GLOBAL_LOC%s\n", 
+            redefineLocalsFound ? " (redefined)" : "");
     
     // Get sanitized filename prefix
     char* prefix = getSanitizedFilenamePrefix();
     if (!prefix) prefix = strdup("unknown");
     
-    for (int i = 0; i < globalCount; i++) {
+    // Determine starting index based on whether we're redefining
+    int startIdx = redefineLocalsFound ? redefineGlobalStartIndex : 0;
+    
+    for (int i = startIdx; i < globalCount; i++) {
         ASTNode* node = globalDeclarations[i];
         
-        if (node && node->type == NODE_DECLARATION) {            // Skip arrays - they have their own dedicated section
+        if (node && node->type == NODE_DECLARATION) {
+            // Skip arrays - they have their own dedicated section
             if (node->declaration.type_info.is_array) continue;
             
             // Check if this is a static global variable

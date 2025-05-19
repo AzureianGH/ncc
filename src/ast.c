@@ -41,6 +41,7 @@ const char* getNodeTypeName(NodeType type) {
         case NODE_ASM_BLOCK: return "ASM_BLOCK";
         case NODE_ASM: return "ASM";
         case NODE_EXPRESSION: return "EXPRESSION";
+        case NODE_TERNARY: return "TERNARY";
         default: return "UNKNOWN";
     }
 }

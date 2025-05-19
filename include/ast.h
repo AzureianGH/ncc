@@ -34,7 +34,8 @@ typedef enum {    NODE_PROGRAM,      // Program root
     NODE_CALL,         // Function call
     NODE_ASM_BLOCK,    // Inline assembly block
     NODE_ASM,          // Inline assembly
-    NODE_EXPRESSION    // Expression statement
+    NODE_EXPRESSION,   // Expression statement
+    NODE_TERNARY       // Ternary conditional expression (? :)
 } NodeType;
 
 // Binary operators
@@ -61,7 +62,8 @@ typedef enum {
     OP_MINUS_ASSIGN,// -=
     OP_MUL_ASSIGN,  // *=
     OP_DIV_ASSIGN,  // /=
-    OP_MOD_ASSIGN   // %=
+    OP_MOD_ASSIGN,  // %=
+    OP_COMMA        // , (comma operator)
 } OperatorType;
 
 // Unary operators
@@ -197,11 +199,17 @@ typedef struct ASTNode {
             struct ASTNode* if_body;   // If body (true branch)
             struct ASTNode* else_body; // Else body (false branch), NULL if no else
         } if_stmt;
-        
-        // For assignment statements
+          // For assignment statements
         struct {
             OperatorType op;  // The operation to perform (OP_PLUS_ASSIGN, etc.)
         } assignment;
+        
+        // For ternary conditional expressions (condition ? expr_if_true : expr_if_false)
+        struct {
+            struct ASTNode* condition;  // Condition expression
+            struct ASTNode* true_expr;  // Expression if condition is true
+            struct ASTNode* false_expr; // Expression if condition is false
+        } ternary;
     };
 }ASTNode;
 
