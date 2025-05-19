@@ -9,6 +9,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+// Global program root for checking deprecated functions 
+ASTNode* g_program_root = NULL;
+
 // Forward declarations
 ASTNode* parseLogicalAndExpression();
 ASTNode* parseLogicalOrExpression();
@@ -109,6 +112,9 @@ ASTNode* parseProgram() {
     ASTNode* root = createNode(NODE_PROGRAM);
     ASTNode* last = NULL;
     
+    // Store the program root for later usage (deprecation checking)
+    g_program_root = root;
+    
     // Parse declarations and functions until end of file
     while (!tokenIs(TOKEN_EOF)) {
         ASTNode* decl = parseDeclaration();
@@ -157,6 +163,8 @@ ASTNode* parseDeclaration() {
             fnNode->function.info.is_naked = tempFuncInfo.is_naked;
             fnNode->function.info.is_stackframe = tempFuncInfo.is_stackframe;
             fnNode->function.info.is_far = tempFuncInfo.is_far;
+            fnNode->function.info.is_deprecated = tempFuncInfo.is_deprecated;
+            fnNode->function.info.deprecation_msg = tempFuncInfo.deprecation_msg;
         }
         return fnNode;
     } else {
@@ -204,7 +212,8 @@ ASTNode* parseFunctionDefinition(char* name, TypeInfo returnType) {
     node->function.info.is_stackframe = returnType.is_stackframe;
     node->function.info.is_far = returnType.is_far;
     node->function.info.is_naked = 0; // Initialize naked flag
-    node->function.info.is_naked = 0;  // Initialize naked flag
+    node->function.info.is_deprecated = 0; // Initialize deprecated flag
+    node->function.info.deprecation_msg = NULL; // Initialize deprecation message
     
     // Allow __attribute__ between return type and parameter list
     if (tokenIs(TOKEN_ATTRIBUTE) || tokenIs(TOKEN_ATTR_OPEN)) {
@@ -717,6 +726,26 @@ ASTNode* parsePrimaryExpression() {
             // Function call
             ASTNode* node = createNode(NODE_CALL);
             node->call.func_name = name;
+            
+            // Check if the function is deprecated
+            ASTNode* current = g_program_root ? g_program_root->left : NULL;
+            while (current) {
+                if (current->type == NODE_FUNCTION && 
+                    strcmp(current->function.func_name, name) == 0) {
+                    if (current->function.info.is_deprecated) {
+                        if (current->function.info.deprecation_msg) {
+                            reportWarning(getCurrentToken().pos, 
+                                "Call to deprecated function '%s': %s", 
+                                name, current->function.info.deprecation_msg);
+                        } else {
+                            reportWarning(getCurrentToken().pos, 
+                                "Call to deprecated function '%s'", name);
+                        }
+                        break;
+                    }
+                }
+                current = current->next;
+            }
             
             consume(TOKEN_LPAREN);
             
