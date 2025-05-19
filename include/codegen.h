@@ -40,6 +40,9 @@ void generateBinaryOp(ASTNode* node);
 // Generate code for a unary operation
 void generateUnaryOp(ASTNode* node);
 
+// Check if a node represents a pointer type
+int isPointerType(ASTNode* node);
+
 // Generate code for a function call
 void generateFunctionCall(ASTNode* node);
 

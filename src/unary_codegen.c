@@ -40,6 +40,15 @@ static int isOptimizableArrayAccess(ASTNode* array, ASTNode* index) {
 
 // Generate optimized code for array indexing with literal index
 static void generateOptimizedArrayAccess(ASTNode* array, ASTNode* index) {
+    // Determine array element type and size
+    TypeInfo* arrTypeInfo = getTypeInfoFromExpression(array);
+    int elemSize = 2; // Default to word size (int)
+    if (arrTypeInfo && (arrTypeInfo->type == TYPE_CHAR || 
+                       arrTypeInfo->type == TYPE_UNSIGNED_CHAR || 
+                       arrTypeInfo->type == TYPE_BOOL)) {
+        elemSize = 1;  // Byte size (char, bool)
+    }
+
     // First generate code to get the array address
     if (array->type == NODE_IDENTIFIER) {
         char* name = array->identifier;
@@ -63,25 +72,38 @@ static void generateOptimizedArrayAccess(ASTNode* array, ASTNode* index) {
     
     // If the index is a literal, we can directly compute the offset
     if (index->type == NODE_LITERAL) {
-        int indexValue = index->literal.int_value;
-        if (indexValue == 0) {
-            // Direct access to first element
-            fprintf(asmFile, "    ; Direct access to array element 0\n");
-            fprintf(asmFile, "    mov al, [bx] ; Access array[0]\n");
+        int idxVal = index->literal.int_value;
+        int offset = idxVal * elemSize;
+        
+        if (elemSize == 1) {
+            // Byte access (char arrays)
+            fprintf(asmFile, "    ; Access byte element [%d]\n", idxVal);
+            fprintf(asmFile, "    mov al, [bx+%d] ; Load byte\n", offset);
             fprintf(asmFile, "    xor ah, ah ; Clear high byte\n");
         } else {
-            // Direct access with fixed offset
-            fprintf(asmFile, "    ; Direct access to array element %d\n", indexValue);
-            fprintf(asmFile, "    mov al, [bx+%d] ; Access array[%d]\n", indexValue, indexValue);
-            fprintf(asmFile, "    xor ah, ah ; Clear high byte\n");
+            // Word access (int arrays)
+            fprintf(asmFile, "    ; Access word element [%d]\n", idxVal);
+            fprintf(asmFile, "    mov ax, [bx+%d] ; Load word\n", offset);
         }
     } else {
         // Variable index needs more complex code
         generateExpression(index);
+        
+        if (elemSize > 1) {
+            // Scale index by element size for word-sized elements
+            fprintf(asmFile, "    ; Scale index by element size (%d bytes)\n", elemSize);
+            fprintf(asmFile, "    shl ax, 1 ; Multiply by 2 for words\n");
+        }
+        
         fprintf(asmFile, "    ; Computing array access\n");
-        fprintf(asmFile, "    add bx, ax ; Add index to base address\n");
-        fprintf(asmFile, "    mov al, [bx] ; Load array element\n");
-        fprintf(asmFile, "    xor ah, ah ; Clear high byte\n");
+        fprintf(asmFile, "    add bx, ax ; Add scaled index to base address\n");
+        
+        if (elemSize == 1) {
+            fprintf(asmFile, "    mov al, [bx] ; Load byte element\n");
+            fprintf(asmFile, "    xor ah, ah ; Clear high byte\n");
+        } else {
+            fprintf(asmFile, "    mov ax, [bx] ; Load word element\n");
+        }
     }
 }
 
@@ -103,8 +125,7 @@ void generateUnaryOp(ASTNode* node) {
                     return; // Exit after optimized generation
                 }
             }
-            
-            // Standard pointer dereference (not optimizable array access)
+              // Standard pointer dereference (not optimizable array access)
             // Generate code to evaluate the pointer expression
             generateExpression(node->right);
             
@@ -121,8 +142,16 @@ void generateUnaryOp(ASTNode* node) {
                 // Check for null pointer
                 fprintf(asmFile, "    cmp bx, 0 ; Check for null pointer\n");
                 fprintf(asmFile, "    je null_ptr_deref_%d\n", labelId);
-                fprintf(asmFile, "    xor ah, ah ; Clear high byte for char\n");
-                fprintf(asmFile, "    mov al, [bx] ; Load byte (char) from memory\n");
+                
+                // Determine load size based on pointed-to type
+                TypeInfo* typeInfo = getTypeInfoFromExpression(node->right);
+                if (typeInfo && (typeInfo->type == TYPE_CHAR || typeInfo->type == TYPE_UNSIGNED_CHAR || typeInfo->type == TYPE_BOOL)) {
+                    fprintf(asmFile, "    xor ah, ah ; Clear high byte for char\n");
+                    fprintf(asmFile, "    mov al, [bx] ; Load byte (char) from memory\n");
+                } else {
+                    // Default to loading a word (int/short)
+                    fprintf(asmFile, "    mov ax, [bx] ; Load word from memory\n");
+                }
                 fprintf(asmFile, "    jmp ptr_deref_end_%d\n", labelId);
                 fprintf(asmFile, "null_ptr_deref_%d:\n", labelId);
                 fprintf(asmFile, "    ; Null pointer dereference detected\n");
@@ -130,9 +159,8 @@ void generateUnaryOp(ASTNode* node) {
                 fprintf(asmFile, "ptr_deref_end_%d:\n", labelId);
                 
                 fprintf(asmFile, "    pop ds ; Restore DS\n");
-            }            // For identifiers that might be pointers
-            else if (node->right->type == NODE_IDENTIFIER) {
-                fprintf(asmFile, "    ; Dereferencing pointer\n");
+            }// For identifiers that might be pointers
+            else if (node->right->type == NODE_IDENTIFIER) {                fprintf(asmFile, "    ; Dereferencing pointer\n");
                 fprintf(asmFile, "    mov bx, ax ; Move pointer address to BX\n");
                 
                 int labelId = getNextLabelId();
@@ -140,8 +168,24 @@ void generateUnaryOp(ASTNode* node) {
                 // Add null pointer check
                 fprintf(asmFile, "    cmp bx, 0 ; Check for null pointer\n");
                 fprintf(asmFile, "    je null_ptr_deref_%d\n", labelId);
-                fprintf(asmFile, "    xor ah, ah ; Clear high byte for char\n");
-                fprintf(asmFile, "    mov al, [bx] ; Load byte (char) from memory\n");
+
+                // Get type info based on identifier name
+                char* name = node->right->identifier;
+                TypeInfo* typeInfo = getTypeInfo(name);
+                if (typeInfo && typeInfo->is_pointer) {
+                    // Determine load size based on pointed-to type
+                    if (typeInfo->type == TYPE_CHAR || typeInfo->type == TYPE_UNSIGNED_CHAR || typeInfo->type == TYPE_BOOL) {
+                        fprintf(asmFile, "    xor ah, ah ; Clear high byte for char\n");
+                        fprintf(asmFile, "    mov al, [bx] ; Load byte (char) from memory\n");
+                    } else {
+                        // Default to loading a word (int/short)
+                        fprintf(asmFile, "    mov ax, [bx] ; Load word from memory\n");
+                    }
+                } else {
+                    // If type info not available, default to word size
+                    fprintf(asmFile, "    mov ax, [bx] ; Load word from memory\n");
+                }
+
                 fprintf(asmFile, "    jmp ptr_deref_end_%d\n", labelId);
                 fprintf(asmFile, "null_ptr_deref_%d:\n", labelId);
                 fprintf(asmFile, "    ; Null pointer dereference detected\n");
@@ -149,8 +193,7 @@ void generateUnaryOp(ASTNode* node) {
                 fprintf(asmFile, "ptr_deref_end_%d:\n", labelId);
             }
             // For other expressions resulting in a pointer
-            else {
-                fprintf(asmFile, "    ; Dereferencing pointer\n");
+            else {                fprintf(asmFile, "    ; Dereferencing pointer\n");
                 fprintf(asmFile, "    mov bx, ax ; Move address to BX\n");
                 
                 int labelId = getNextLabelId();
@@ -158,8 +201,18 @@ void generateUnaryOp(ASTNode* node) {
                 // Add null pointer check
                 fprintf(asmFile, "    cmp bx, 0 ; Check for null pointer\n");
                 fprintf(asmFile, "    je null_ptr_deref_%d\n", labelId);
-                fprintf(asmFile, "    xor ah, ah ; Clear high byte for char\n");
-                fprintf(asmFile, "    mov al, [bx] ; Load byte (char) from memory\n");
+                
+                // For complex expressions, we need to infer the type from context
+                // Get type info if available, otherwise default to word size
+                TypeInfo* typeInfo = getTypeInfoFromExpression(node->right);
+                if (typeInfo && (typeInfo->type == TYPE_CHAR || typeInfo->type == TYPE_UNSIGNED_CHAR || typeInfo->type == TYPE_BOOL)) {
+                    fprintf(asmFile, "    xor ah, ah ; Clear high byte for char\n");
+                    fprintf(asmFile, "    mov al, [bx] ; Load byte (char) from memory\n");
+                } else {
+                    // Default to loading a word (int/short)
+                    fprintf(asmFile, "    mov ax, [bx] ; Load word from memory\n");
+                }
+                
                 fprintf(asmFile, "    jmp ptr_deref_end_%d\n", labelId);
                 fprintf(asmFile, "null_ptr_deref_%d:\n", labelId);
                 fprintf(asmFile, "    ; Null pointer dereference detected\n");

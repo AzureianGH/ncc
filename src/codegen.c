@@ -3,9 +3,14 @@
 #include "string_literals.h"
 #include "error_manager.h"
 #include "global_variables.h"
+#include "type_checker.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+// External declarations from type_checker.c
+extern TypeInfo* getTypeInfo(const char* name);
+extern TypeInfo* getTypeInfoFromExpression(ASTNode* expr);
 
 // Output file for assembly code
 FILE* asmFile = NULL;
@@ -162,6 +167,33 @@ void finalizeCodeGen() {
         fclose(asmFile);
         asmFile = NULL;
     }
+}
+
+// Check if a node represents a pointer type
+int isPointerType(ASTNode* node) {
+    if (!node) return 0;
+    
+    // Direct check for literals - string literals are pointers
+    if (node->type == NODE_LITERAL) {
+        // String literals are pointers
+        if (node->literal.data_type == TYPE_CHAR && node->literal.string_value) {
+            return 1;
+        }
+        // Far pointers
+        if (node->literal.data_type == TYPE_FAR_POINTER) {
+            return 1;
+        }
+    }
+    
+    // For identifiers, check the symbol table
+    if (node->type == NODE_IDENTIFIER) {
+        TypeInfo* typeInfo = getTypeInfo(node->identifier);
+        return typeInfo && typeInfo->is_pointer;
+    }
+    
+    // For expressions, use the type inferred from the expression
+    TypeInfo* typeInfo = getTypeInfoFromExpression(node);
+    return typeInfo && typeInfo->is_pointer;
 }
 
 // Generate a unique label ID
@@ -453,34 +485,40 @@ void generateStatement(ASTNode* node) {
                 generateExpression(node->left->right);
                 
                 // Check if this is a far pointer (segment in DX, offset in AX)
-                if (node->left->right->type == NODE_LITERAL && node->left->right->literal.data_type == TYPE_FAR_POINTER) {                fprintf(asmFile, "    ; Far pointer assignment\n");
+                if (node->left->right->type == NODE_LITERAL && node->left->right->literal.data_type == TYPE_FAR_POINTER) {
+                    fprintf(asmFile, "    ; Far pointer assignment\n");
                     fprintf(asmFile, "    push ds ; Save current DS\n");
                     fprintf(asmFile, "    mov bx, ax ; Move offset to BX\n");
                     fprintf(asmFile, "    mov ds, dx ; Set DS to segment\n");
                     fprintf(asmFile, "    pop ax ; Restore right-hand side value\n");
                     
-                    // Check if assignment is through a char pointer
-                    // In char_test.c, we're assigning to a char, so store just a byte (hardcoded for now)
-                    fprintf(asmFile, "    mov [bx], al ; Store byte value through far pointer\n");
+                    // Get type info to determine proper store size
+                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left->right);
+                    if (typeInfo && (typeInfo->type == TYPE_CHAR || 
+                                    typeInfo->type == TYPE_UNSIGNED_CHAR || 
+                                    typeInfo->type == TYPE_BOOL)) {
+                        fprintf(asmFile, "    mov [bx], al ; Store byte value through far pointer\n");
+                    } else {
+                        fprintf(asmFile, "    mov [bx], ax ; Store word value through far pointer\n");
+                    }
                     
-                    fprintf(asmFile, "    pop ds ; Restore DS\n");                } else if (node->left->right->type == NODE_IDENTIFIER) {
-                    // Regular near pointer (char_test.c now uses regular pointers)
-                    fprintf(asmFile, "    mov bx, ax ; Move pointer address to BX\n");
-                    
-                    // Restore the value and store through the pointer
-                    fprintf(asmFile, "    pop ax ; Restore right-hand side value\n");
-                    
-                    // In char_test.c, we're assigning to a char, so store just a byte
-                    fprintf(asmFile, "    mov [bx], al ; Store byte value through pointer\n");
-                }else {
+                    fprintf(asmFile, "    pop ds ; Restore DS\n");
+                } else {
                     // Regular near pointer
                     fprintf(asmFile, "    mov bx, ax ; Move pointer address to BX\n");
                     
                     // Restore the value and store through the pointer
                     fprintf(asmFile, "    pop ax ; Restore right-hand side value\n");
                     
-                    // In char_test.c, we're assigning to a char, so store just a byte
-                    fprintf(asmFile, "    mov [bx], al ; Store byte value through pointer\n");
+                    // Get type info to determine proper store size
+                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left->right);
+                    if (typeInfo && (typeInfo->type == TYPE_CHAR || 
+                                    typeInfo->type == TYPE_UNSIGNED_CHAR || 
+                                    typeInfo->type == TYPE_BOOL)) {
+                        fprintf(asmFile, "    mov [bx], al ; Store byte value through pointer\n");
+                    } else {
+                        fprintf(asmFile, "    mov [bx], ax ; Store word value through pointer\n");
+                    }
                 }
             }
             else {
@@ -739,11 +777,73 @@ void generateBinaryOp(ASTNode* node) {
       // Perform operation based on operator type
     switch (node->operation.op) {
         case OP_ADD:
-             fprintf(asmFile, "    add ax, bx ; Addition\n");
-             break;
-        case OP_SUB:
-            fprintf(asmFile, "    sub ax, bx ; Subtraction\n");
+            // Check for pointer arithmetic (pointer + integer)
+            if (isPointerType(node->left)) {
+                // Get element size for scaling
+                TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
+                if (typeInfo) {
+                    int elemSize = (typeInfo->type == TYPE_CHAR || 
+                                   typeInfo->type == TYPE_UNSIGNED_CHAR || 
+                                   typeInfo->type == TYPE_BOOL) ? 1 : 2;
+                    
+                    if (elemSize > 1) {
+                        // Scale the offset by element size
+                        fprintf(asmFile, "    ; Pointer arithmetic: scale by element size %d\n", elemSize);
+                        fprintf(asmFile, "    shl bx, 1 ; Scale index by 2 for word elements\n");
+                    }
+                }
+            } else if (isPointerType(node->right)) {
+                // Case of integer + pointer (need to scale integer)
+                TypeInfo* typeInfo = getTypeInfoFromExpression(node->right);
+                if (typeInfo) {
+                    int elemSize = (typeInfo->type == TYPE_CHAR || 
+                                   typeInfo->type == TYPE_UNSIGNED_CHAR || 
+                                   typeInfo->type == TYPE_BOOL) ? 1 : 2;
+                    
+                    if (elemSize > 1) {
+                        // Scale the offset by element size
+                        fprintf(asmFile, "    ; Pointer arithmetic: scale by element size %d\n", elemSize);
+                        fprintf(asmFile, "    shl ax, 1 ; Scale index by 2 for word elements\n");
+                    }
+                    
+                    // Swap operands to ensure pointer is in AX
+                    fprintf(asmFile, "    xchg ax, bx ; Swap to put pointer in AX\n");
+                }
+            }
+            fprintf(asmFile, "    add ax, bx ; Addition\n");
             break;
+            
+        case OP_SUB:
+            // Check for pointer arithmetic (pointer - integer or pointer - pointer)
+            if (isPointerType(node->left)) {
+                if (isPointerType(node->right)) {
+                    // Pointer - Pointer: yields a count of elements between pointers
+                    fprintf(asmFile, "    ; Pointer difference\n");
+                    fprintf(asmFile, "    sub ax, bx ; Calculate raw byte difference\n");
+                    
+                    // Divide by element size to get element count
+                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
+                    if (typeInfo && (typeInfo->type != TYPE_CHAR && 
+                                    typeInfo->type != TYPE_UNSIGNED_CHAR && 
+                                    typeInfo->type != TYPE_BOOL)) {
+                        fprintf(asmFile, "    sar ax, 1 ; Divide by 2 for word elements\n");
+                    }
+                } else {
+                    // Pointer - Integer: scale integer by element size
+                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
+                    if (typeInfo && (typeInfo->type != TYPE_CHAR && 
+                                    typeInfo->type != TYPE_UNSIGNED_CHAR && 
+                                    typeInfo->type != TYPE_BOOL)) {
+                        fprintf(asmFile, "    ; Pointer arithmetic: scale by element size\n");
+                        fprintf(asmFile, "    shl bx, 1 ; Scale index by 2 for word elements\n");
+                    }
+                    fprintf(asmFile, "    sub ax, bx ; Subtraction\n");
+                }
+            } else {
+                fprintf(asmFile, "    sub ax, bx ; Subtraction\n");
+            }
+            break;
+            
         case OP_MUL:
             fprintf(asmFile, "    imul bx ; Multiplication (signed)\n");
             break;

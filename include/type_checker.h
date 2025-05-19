@@ -18,4 +18,7 @@ int isVoidPointer(ASTNode* node);
 // Function to check if a node represents a dereferenced void pointer
 int isVoidPointerDereference(ASTNode* node);
 
+// Get type information from an expression
+TypeInfo* getTypeInfoFromExpression(ASTNode* expr);
+
 #endif // TYPE_CHECKER_H

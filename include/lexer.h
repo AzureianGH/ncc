@@ -19,6 +19,7 @@ typedef enum {
     // Legacy attribute
     TOKEN_ATTRIBUTE,     // __attribute__
     TOKEN_NAKED,         // naked
+    TOKEN_DEPRECATED,    // deprecated
     TOKEN_IF,
     TOKEN_ELSE,
     TOKEN_WHILE,

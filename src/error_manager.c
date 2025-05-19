@@ -130,8 +130,6 @@ void reportError(int position, const char* format, ...) {
 
 // Report a warning
 void reportWarning(int position, const char* format, ...) {
-    if (quietMode) return;
-    
     warningCount++;
     
     fprintf(stderr, "%swarning:%s ", COLOR_YELLOW, COLOR_RESET);

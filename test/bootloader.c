@@ -2,27 +2,31 @@
 
 
 [[naked]] void biosInitialize() {
-    __asm("cli");           // Disable interrupts
-
+    __asm("cli");
     __asm("xor ax, ax");
-    __asm("mov ss, ax");    // Set stack segment to 0x0000
-    __asm("mov sp, 0x7C00");// Set stack pointer below bootloader
-
-    __asm("sti");           // Re-enable interrupts
-
-    __asm("jmp _main");     // Jump to main function
+    __asm("mov ss, ax");
+    __asm("mov sp, 0x7C00");
+    __asm("sti");
+    __asm("jmp _main");
 }
 
-[[naked]] void main()
+[[naked]]
+[[deprecated("This function will be removed soon.")]]
+void haltForever()
+{
+    __asm("cli");           // Disable interrupts
+    __asm("hlt");           // Halt CPU
+    __asm("jmp _haltForever"); // Infinite loop
+}
+
+void main()
 {
     clearScreen();
-    char mes[] = "Hello";
-    char pain[] = {'H',  'l', 'l', 'o', '\0'};
-    
-    if (sizeof("Hello") == 6 && sizeof(mes) == 6 || sizeof(pain) == 6)
-        writeString("Hello, World!\r\n");
-    
-
+    char test[] = "Hello, World!\r\n";
+    char* smaller = "Hello, Earth!\r\n";
+    writeString(test); // Hello, World!
+    strcpy(test, smaller);
+    writeString(test); // Hello, Earth!
     haltForever();
 }
 
@@ -41,15 +45,6 @@ void writeString(char* str)
     }
 }
 
-[[naked]] void haltForever()
-{
-    __asm("cli");           // Disable interrupts
-    __asm("hlt");           // Halt CPU
-    __asm("jmp _haltForever"); // Infinite loop
-}
-
-
-
 void clearScreen()
 {
     __asm("mov ax, 0x0003"); // Set video mode 3 (80x25 text mode)
@@ -62,8 +57,8 @@ int strlen(char* s) {
     return p - s;
 }
 
-void strcpy(char* dest, char* src)
-{
+
+void strcpy(char* dest, char* src) {
     while (*src) {
         *dest++ = *src++;
     }

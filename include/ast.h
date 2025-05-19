@@ -99,6 +99,8 @@ typedef struct {
     int is_stackframe;  // Uses stackframe with register preservation
     int is_far;        // Is a far function
     int is_naked;      // Function is naked (no prologue/epilogue)
+    int is_deprecated; // Function is deprecated (1 if true)
+    char* deprecation_msg; // Deprecation message (NULL if not deprecated)
 } FunctionInfo;
 
 // AST Node structure
