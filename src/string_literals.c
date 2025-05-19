@@ -16,6 +16,7 @@ extern int arrayCount;
 extern char** arrayNames;
 extern int* arraySizes;
 extern DataType* arrayTypes;
+extern char** arrayFunctions;
 
 // Has the string/array marker been found?
 extern int stringMarkerFound;
@@ -148,14 +149,15 @@ int addStringLiteral(const char* str) {
     return index;
 }
 
-// Add an array declaration to track it for generation later
-int addArrayDeclaration(const char* name, int size, DataType type) {
+// Add an array declaration to track it for generation later, including function context
+int addArrayDeclaration(const char* name, int size, DataType type, const char* funcName) {
     // Initialize arrays if first time
     if (arrayNames == NULL) {
         arrayNames = (char**)malloc(sizeof(char*));
         arraySizes = (int*)malloc(sizeof(int));
         arrayTypes = (DataType*)malloc(sizeof(DataType));
-        if (!arrayNames || !arraySizes || !arrayTypes) {
+        arrayFunctions = (char**)malloc(sizeof(char*));
+        if (!arrayNames || !arraySizes || !arrayTypes || !arrayFunctions) {
             fprintf(stderr, "Debug: Failed to allocate memory for array tracking\n");
             return -1;
         }
@@ -164,15 +166,15 @@ int addArrayDeclaration(const char* name, int size, DataType type) {
         char** newNames = (char**)realloc(arrayNames, (arrayCount + 1) * sizeof(char*));
         int* newSizes = (int*)realloc(arraySizes, (arrayCount + 1) * sizeof(int));
         DataType* newTypes = (DataType*)realloc(arrayTypes, (arrayCount + 1) * sizeof(DataType));
-        
-        if (!newNames || !newSizes || !newTypes) {
+        char** newFuncs = (char**)realloc(arrayFunctions, (arrayCount + 1) * sizeof(char*));
+        if (!newNames || !newSizes || !newTypes || !newFuncs) {
             fprintf(stderr, "Debug: Failed to reallocate memory for array tracking\n");
             return -1;
         }
-        
         arrayNames = newNames;
         arraySizes = newSizes;
         arrayTypes = newTypes;
+        arrayFunctions = newFuncs;
     }
     
     // Store array info
@@ -181,14 +183,164 @@ int addArrayDeclaration(const char* name, int size, DataType type) {
         fprintf(stderr, "Debug: Failed to allocate memory for array name\n");
         return -1;
     }
-    
+    arrayFunctions[arrayCount] = funcName ? strdup(funcName) : strdup("global");
+    if (!arrayFunctions[arrayCount]) {
+        fprintf(stderr, "Debug: Failed to allocate memory for array function name\n");
+        free(arrayNames[arrayCount]);
+        return -1;
+    }
     arraySizes[arrayCount] = size;
     arrayTypes[arrayCount] = type;
     
     return arrayCount++;
 }
 
-char** existingStrings = NULL;
+// Array initializer tracking
+typedef struct {
+    ASTNode* initializer;
+    int is_static;
+} ArrayInitializerInfo;
+
+static ArrayInitializerInfo* arrayInitializers = NULL;
+
+// External function for writing array initializers
+extern void writeArrayWithInitializers(FILE* outFile, const char* arrayName, int arraySize,
+                                    DataType arrayType, ASTNode* initializer);
+
+// Add an array declaration with initializers
+int addArrayDeclarationWithInitializers(const char* name, int size, DataType type, 
+                                      const char* funcName, ASTNode* initializer, 
+                                      int is_static) {
+    int arrayIndex = addArrayDeclaration(name, size, type, funcName);
+    
+    // Create or resize the initializers array if needed
+    if (arrayInitializers == NULL) {
+        arrayInitializers = (ArrayInitializerInfo*)malloc(sizeof(ArrayInitializerInfo) * (arrayIndex + 1));
+    } else {
+        arrayInitializers = (ArrayInitializerInfo*)realloc(
+            arrayInitializers, sizeof(ArrayInitializerInfo) * (arrayIndex + 1));
+    }
+    
+    if (!arrayInitializers) {
+        reportError(-1, "Memory allocation failed for array initializer info");
+        return -1;
+    }
+    
+    // Store the initializer
+    arrayInitializers[arrayIndex].initializer = initializer;
+    arrayInitializers[arrayIndex].is_static = is_static;
+    
+    return arrayIndex;
+}
+
+// Hash table for string deduplication
+typedef struct StringEntry {
+    char* string;
+    int index;
+    struct StringEntry* next;
+} StringEntry;
+
+#define STRING_HASH_SIZE 64
+StringEntry* stringHashTable[STRING_HASH_SIZE] = {NULL};
+
+// Hash function for strings
+static unsigned int hashString(const char* str) {
+    unsigned int hash = 0;
+    while (*str) {
+        hash = hash * 31 + (*str++);
+    }
+    return hash % STRING_HASH_SIZE;
+}
+
+// Add string to hash table or get existing index
+static int getStringIndex(const char* str, int newIndex) {
+    // When redefining and we're already past the redefinition point,
+    // don't try to deduplicate strings - assign sequential indices
+    extern int redefineLocalsFound;
+    extern int redefineStringStartIndex;
+    
+    if (redefineLocalsFound && stringLiteralCount > redefineStringStartIndex && 
+        newIndex >= redefineStringStartIndex) {
+        // For new strings after redefinition, just use the provided index
+        unsigned int hash = hashString(str);
+        StringEntry* entry = (StringEntry*)malloc(sizeof(StringEntry));
+        if (entry) {
+            entry->string = strdup(str);
+            entry->index = newIndex;
+            entry->next = stringHashTable[hash];
+            stringHashTable[hash] = entry;
+        }
+        return newIndex;
+    }
+    
+    // Normal string deduplication for original strings
+    unsigned int hash = hashString(str);
+    StringEntry* entry = stringHashTable[hash];
+    
+    // Look for existing entry
+    while (entry) {
+        if (strcmp(entry->string, str) == 0) {
+            return entry->index;
+        }
+        entry = entry->next;
+    }
+    
+    // Add new entry
+    entry = (StringEntry*)malloc(sizeof(StringEntry));
+    if (entry) {
+        entry->string = strdup(str);
+        entry->index = newIndex;
+        entry->next = stringHashTable[hash];
+        stringHashTable[hash] = entry;
+    }
+    
+    return newIndex;
+}
+
+// Hash table for string label deduplication
+typedef struct StringLabelEntry {
+    char* label;
+    struct StringLabelEntry* next;
+} StringLabelEntry;
+
+#define STRING_LABEL_HASH_SIZE 64
+StringLabelEntry* stringLabelHashTable[STRING_LABEL_HASH_SIZE] = {NULL};
+
+// Hash function for string labels
+static unsigned int hashStringLabel(const char* label) {
+    unsigned int hash = 0;
+    while (*label) {
+        hash = hash * 31 + (*label++);
+    }
+    return hash % STRING_LABEL_HASH_SIZE;
+}
+
+// Check if a string label already exists and add it if not
+static int stringLabelExists(const char* label) {
+    unsigned int hash = hashStringLabel(label);
+    StringLabelEntry* entry = stringLabelHashTable[hash];
+    
+    while (entry) {
+        if (strcmp(entry->label, label) == 0) {
+            return 1; // Found
+        }
+        entry = entry->next;
+    }
+    
+    // Add new entry
+    entry = (StringLabelEntry*)malloc(sizeof(StringLabelEntry));
+    if (entry) {
+        entry->label = strdup(label);
+        entry->next = stringLabelHashTable[hash];
+        stringLabelHashTable[hash] = entry;
+    }
+    
+    return 0; // Not found, added now
+}
+
+#ifdef __GNUC__
+#pragma GCC diagnostic ignored "-Wunused-but-set-variable"
+#endif
 
 // Generate string literals at specific location (after marker function)
 void generateStringsAtMarker() {
@@ -196,14 +348,6 @@ void generateStringsAtMarker() {
     extern int redefineLocalsFound;
     extern int redefineStringStartIndex;
     
-    // Count how many strings already exist
-    int existingCount = 0;
-    if (existingStrings) {
-        while (existingStrings[existingCount] != NULL) {
-            existingCount++;
-        }
-    }
-
     // Skip if strings were already generated and we're not redefining locations
     if ((stringMarkerFound && !redefineLocalsFound) || stringLiteralCount == 0) return;
     
@@ -217,12 +361,67 @@ void generateStringsAtMarker() {
     char* prefix = getSanitizedFilenamePrefix();
     if (!prefix) prefix = strdup("unknown");
     
-    // If redefining, only generate strings added after the redefine marker
-    int startIdx = redefineLocalsFound ? redefineStringStartIndex : 0;
+    // First build the hash table of existing string labels if redefining
+    if (redefineLocalsFound && redefineStringStartIndex > 0) {
+        for (int i = 0; i < redefineStringStartIndex; i++) {
+            if (stringLiterals[i]) {
+                char labelName[256];
+                snprintf(labelName, sizeof(labelName), "%s_string_%d", prefix, i);
+                stringLabelExists(labelName);
+            }
+        }
+    }
     
+    // Get the maximum string index from before the redefinition point (if redefining)
+    int maxIndexBeforeRedefine = 0;
+    if (redefineLocalsFound && redefineStringStartIndex > 0) {
+        // We need to assume that string indices 0 to redefineStringStartIndex-1 exist
+        maxIndexBeforeRedefine = redefineStringStartIndex;
+    }
+      // For non-redefine case, we process all strings from the beginning
+    int startIdx = 0;
+    
+    if (redefineLocalsFound) {
+        // In redefine case, clear any existing content deduplication
+        // to ensure each string gets its own index
+        for (int i = 0; i < STRING_HASH_SIZE; i++) {
+            StringEntry* entry = stringHashTable[i];
+            while (entry) {
+                StringEntry* temp = entry->next;
+                free(entry->string);
+                free(entry);
+                entry = temp;
+            }
+            stringHashTable[i] = NULL;
+        }
+        
+        // Register all string indices up to the redefinition point
+        for (int i = 0; i < redefineStringStartIndex; i++) {
+            if (stringLiterals[i]) {
+                getStringIndex(stringLiterals[i], i);
+            }
+        }
+        
+        // For redefine case, we only process new strings
+        startIdx = redefineStringStartIndex;
+    }
+    
+    // Generate strings after the redefine marker (if applicable)
     for (int i = startIdx; i < stringLiteralCount; i++) {
-        // Offset the index by the number of already existing strings
-        fprintf(asmFile, "%s_string_%d: db ", prefix, existingCount + (i - startIdx));
+        // For each string, get or create its index
+        int stringIdx = i;
+        
+        // Create the label name based on the index
+        char labelName[256];
+        snprintf(labelName, sizeof(labelName), "%s_string_%d", prefix, stringIdx);
+        
+        // Only skip if this specific label already exists (should never happen with new strings)
+        if (redefineLocalsFound && stringLabelExists(labelName)) {
+            continue;
+        }
+        
+        // Output the string
+        fprintf(asmFile, "%s: db ", labelName);
         
         // Output each byte of the string as a decimal value
         size_t len = strlen(stringLiterals[i]);
@@ -239,8 +438,52 @@ void generateStringsAtMarker() {
     fprintf(asmFile, "; String literal location marker%s\n", redefineLocalsFound ? " (redefined)" : "");
 }
 
+#ifdef __GNUC__
+#pragma GCC diagnostic pop
+#endif
 // Forward declaration
 extern void generateArrayWithInitializers(ASTNode* node);
+
+// Hash table for array deduplication
+typedef struct ArrayEntry {
+    char* name;
+    struct ArrayEntry* next;
+} ArrayEntry;
+
+#define ARRAY_HASH_SIZE 64
+ArrayEntry* arrayHashTable[ARRAY_HASH_SIZE] = {NULL};
+
+// Hash function for array names
+static unsigned int hashArrayName(const char* name) {
+    unsigned int hash = 0;
+    while (*name) {
+        hash = hash * 31 + (*name++);
+    }
+    return hash % ARRAY_HASH_SIZE;
+}
+
+// Check if array name exists in hash table
+static int arrayExists(const char* name) {
+    unsigned int hash = hashArrayName(name);
+    ArrayEntry* entry = arrayHashTable[hash];
+    
+    while (entry) {
+        if (strcmp(entry->name, name) == 0) {
+            return 1; // Found
+        }
+        entry = entry->next;
+    }
+    
+    // Add new entry
+    entry = (ArrayEntry*)malloc(sizeof(ArrayEntry));
+    if (entry) {
+        entry->name = strdup(name);
+        entry->next = arrayHashTable[hash];
+        arrayHashTable[hash] = entry;
+    }
+    
+    return 0; // Not found, added to table
+}
 
 // Generate array declarations at specific location (after marker function)
 void generateArraysAtMarker() {
@@ -261,33 +504,62 @@ void generateArraysAtMarker() {
     char* prefix = getSanitizedFilenamePrefix();
     if (!prefix) prefix = strdup("unknown");
     
+    // First, build the hash table of existing arrays if redefining
+    if (redefineLocalsFound && redefineArrayStartIndex > 0) {
+        for (int i = 0; i < redefineArrayStartIndex; i++) {
+            char fullName[256];
+            snprintf(fullName, sizeof(fullName), "_%s_%s", prefix, arrayNames[i]);
+            arrayExists(fullName);
+        }
+    }
+    
     // Determine starting index based on whether we're redefining
     int startIdx = redefineLocalsFound ? redefineArrayStartIndex : 0;
     
+    // Output only new, unique arrays
     for (int i = startIdx; i < arrayCount; i++) {
-        fprintf(asmFile, "_%s_%s: ", prefix, arrayNames[i]);
-        
-        // Determine element size and directive
-        const char* directive;
-        int elementSize;
-        
-        switch (arrayTypes[i]) {
-            case TYPE_CHAR:
-            case TYPE_UNSIGNED_CHAR:
-            case TYPE_BOOL:
-                directive = "db";
-                elementSize = 1;
-                break;
-            default:
-                directive = "dw";
-                elementSize = 2;
-                break;
+        char fullName[256];
+        // Label: file_function_arrayName_index
+        snprintf(fullName, sizeof(fullName), "_%s_%s_%s_%d", prefix,
+                 arrayFunctions[i], arrayNames[i], i);
+
+        // Skip if array was already defined
+        if (redefineLocalsFound && arrayExists(fullName)) {
+            continue;
         }
         
-        // Output array declaration with zeros
-        fprintf(asmFile, "times %d %s 0 ; Array of %d bytes\n", 
-                arraySizes[i], directive, arraySizes[i] * elementSize);
+        fprintf(asmFile, "%s: ", fullName);
+        
+        // Check if this array has initializers
+        if (arrayInitializers && i < arrayCount && arrayInitializers[i].initializer) {
+            // Generate with initializers
+            writeArrayWithInitializers(asmFile, arrayNames[i], arraySizes[i], 
+                                      arrayTypes[i], arrayInitializers[i].initializer);
+        } else {
+            // Determine element size and directive
+            const char* directive;
+            int elementSize;
+            
+            switch (arrayTypes[i]) {
+                case TYPE_CHAR:
+                case TYPE_UNSIGNED_CHAR:
+                case TYPE_BOOL:
+                    directive = "db";
+                    elementSize = 1;
+                    break;
+                default:
+                    directive = "dw";
+                    elementSize = 2;
+                    break;
+            }
+            
+            // Output array declaration with zeros
+            fprintf(asmFile, "times %d %s 0 ; Array of %d bytes\n", 
+                    arraySizes[i], directive, arraySizes[i] * elementSize);
+        }
     }
+    
+    free(prefix);
 }
 
 // Generate data section with string literals and arrays
@@ -323,36 +595,126 @@ void generateStringLiteralsSection() {
     }
     
     // Generate array declarations if not already done
-    if (!arrayMarkerFound && arrayCount > 0) {        fprintf(asmFile, "\n; Array declarations section\n");
+    if (!arrayMarkerFound && arrayCount > 0) {
+        fprintf(asmFile, "\n; Array declarations section\n");
         
         // Get sanitized filename prefix
         char* prefix = getSanitizedFilenamePrefix();
         if (!prefix) prefix = strdup("unknown");
         
         for (int i = 0; i < arrayCount; i++) {
-            fprintf(asmFile, "_%s_%s: ", prefix, arrayNames[i]);
-              // Determine element size and directive
-            const char* directive;
-            int elementSize;
+            char fullName[256];
+            snprintf(fullName, sizeof(fullName), "_%s_%s_%s_%d", prefix,
+                    arrayFunctions[i], arrayNames[i], i);
             
-            switch (arrayTypes[i]) {
-                case TYPE_CHAR:
-                case TYPE_UNSIGNED_CHAR:
-                case TYPE_BOOL:
-                    directive = "db";
-                    elementSize = 1;
-                    break;
-                default:
-                    directive = "dw";
-                    elementSize = 2;
-                    break;
+            fprintf(asmFile, "%s: ", fullName);
+            
+            // Check if this array has initializers
+            if (arrayInitializers && i < arrayCount && arrayInitializers[i].initializer) {
+                // Generate with initializers
+                writeArrayWithInitializers(asmFile, arrayNames[i], arraySizes[i], 
+                                          arrayTypes[i], arrayInitializers[i].initializer);
+            } else {
+                // Determine element size and directive
+                const char* directive;
+                int elementSize;
+                
+                switch (arrayTypes[i]) {
+                    case TYPE_CHAR:
+                    case TYPE_UNSIGNED_CHAR:
+                    case TYPE_BOOL:
+                        directive = "db";
+                        elementSize = 1;
+                        break;
+                    default:
+                        directive = "dw";
+                        elementSize = 2;
+                        break;
+                }
+                
+                // Output array declaration with zeros
+                fprintf(asmFile, "times %d %s 0 ; Array of %d bytes\n", 
+                        arraySizes[i], directive, arraySizes[i] * elementSize);
             }
-            
-            // Output array declaration with zeros
-            fprintf(asmFile, "times %d %s 0 ; Array of %d bytes\n",                arraySizes[i], directive, arraySizes[i] * elementSize);
         }
         
-        // Free the prefix
         free(prefix);
+    }
+}
+
+void cleanupStringAndArrayTables() {
+    // Free stringLiterals
+    if (stringLiterals) {
+        for (int i = 0; i < stringLiteralCount; i++) {
+            free(stringLiterals[i]);
+        }
+        free(stringLiterals);
+        stringLiterals = NULL;
+    }
+    stringLiteralCount = 0;
+
+    // Free array tracking
+    if (arrayNames) {
+        for (int i = 0; i < arrayCount; i++) {
+            free(arrayNames[i]);
+        }
+        free(arrayNames);
+        arrayNames = NULL;
+    }
+    if (arraySizes) {
+        free(arraySizes);
+        arraySizes = NULL;
+    }
+    if (arrayTypes) {
+        free(arrayTypes);
+        arrayTypes = NULL;
+    }
+    if (arrayFunctions) {
+        for (int i = 0; i < arrayCount; i++) {
+            free(arrayFunctions[i]);
+        }
+        free(arrayFunctions);
+        arrayFunctions = NULL;
+    }
+    arrayCount = 0;
+
+    // Free stringHashTable
+    for (int i = 0; i < STRING_HASH_SIZE; i++) {
+        StringEntry* entry = stringHashTable[i];
+        while (entry) {
+            StringEntry* temp = entry->next;
+            free(entry->string);
+            free(entry);
+            entry = temp;
+        }
+        stringHashTable[i] = NULL;
+    }    // Free arrayHashTable
+    for (int i = 0; i < ARRAY_HASH_SIZE; i++) {
+        ArrayEntry* aEntry = arrayHashTable[i];
+        while (aEntry) {
+            ArrayEntry* temp = aEntry->next;
+            free(aEntry->name);
+            free(aEntry);
+            aEntry = temp;
+        }
+        arrayHashTable[i] = NULL;
+    }
+    
+    // Free stringLabelHashTable
+    for (int i = 0; i < STRING_LABEL_HASH_SIZE; i++) {
+        StringLabelEntry* entry = stringLabelHashTable[i];
+        while (entry) {
+            StringLabelEntry* temp = entry->next;
+            free(entry->label);
+            free(entry);
+            entry = temp;
+        }
+        stringLabelHashTable[i] = NULL;
+    }
+    
+    // Free array initializers tracking
+    if (arrayInitializers) {
+        free(arrayInitializers);
+        arrayInitializers = NULL;
     }
 }

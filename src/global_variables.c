@@ -12,26 +12,45 @@ static ASTNode** globalDeclarations = NULL;
 extern int globalMarkerFound; // Made non-static for access from codegen.c
 static int redefineGlobalStartIndex = 0; // Track where redefined globals start
 
-// Helper function to get sanitized filename prefix
-static char* getSanitizedFilenamePrefix() {
-    const char* filename = getCurrentSourceFilename();
-    char* prefix = (char*)malloc(strlen(filename) + 1);
-    if (!prefix) return NULL;
+// Hash table for global variable deduplication
+typedef struct GlobalEntry {
+    char* name;
+    struct GlobalEntry* next;
+} GlobalEntry;
+
+#define GLOBAL_HASH_SIZE 64
+static GlobalEntry* globalHashTable[GLOBAL_HASH_SIZE] = {NULL};
+
+// Hash function for global variable names
+static unsigned int hashGlobalName(const char* name) {
+    unsigned int hash = 0;
+    while (*name) {
+        hash = hash * 31 + (*name++);
+    }
+    return hash % GLOBAL_HASH_SIZE;
+}
+
+// Check if global variable name exists in hash table
+static int globalExists(const char* name) {
+    unsigned int hash = hashGlobalName(name);
+    GlobalEntry* entry = globalHashTable[hash];
     
-    strcpy(prefix, filename);
-    
-    // Remove extension
-    char* dot = strrchr(prefix, '.');
-    if (dot) *dot = '\0';
-    
-    // Replace invalid characters with underscore
-    for (char* c = prefix; *c; c++) {
-        if (!isalnum(*c) && *c != '_') {
-            *c = '_';
+    while (entry) {
+        if (strcmp(entry->name, name) == 0) {
+            return 1; // Found
         }
+        entry = entry->next;
     }
     
-    return prefix;
+    // Add new entry
+    entry = (GlobalEntry*)malloc(sizeof(GlobalEntry));
+    if (entry) {
+        entry->name = strdup(name);
+        entry->next = globalHashTable[hash];
+        globalHashTable[hash] = entry;
+    }
+    
+    return 0; // Not found, added to table
 }
 
 // Add a global declaration to be generated later
@@ -87,15 +106,35 @@ void generateGlobalsAtMarker(FILE* asmFile) {
     char* prefix = getSanitizedFilenamePrefix();
     if (!prefix) prefix = strdup("unknown");
     
+    // First, build the hash table of existing globals if redefining
+    if (redefineLocalsFound && redefineGlobalStartIndex > 0) {
+        for (int i = 0; i < redefineGlobalStartIndex; i++) {
+            ASTNode* node = globalDeclarations[i];
+            if (node && node->type == NODE_DECLARATION && !node->declaration.type_info.is_array) {
+                char fullName[256];
+                snprintf(fullName, sizeof(fullName), "_%s_%s", prefix, node->declaration.var_name);
+                globalExists(fullName);
+            }
+        }
+    }
+    
     // Determine starting index based on whether we're redefining
     int startIdx = redefineLocalsFound ? redefineGlobalStartIndex : 0;
-    
-    for (int i = startIdx; i < globalCount; i++) {
+      for (int i = startIdx; i < globalCount; i++) {
         ASTNode* node = globalDeclarations[i];
         
         if (node && node->type == NODE_DECLARATION) {
             // Skip arrays - they have their own dedicated section
             if (node->declaration.type_info.is_array) continue;
+            
+            // Create the full name with prefix
+            char fullName[256];
+            snprintf(fullName, sizeof(fullName), "_%s_%s", prefix, node->declaration.var_name);
+            
+            // Skip if global was already defined
+            if (redefineLocalsFound && globalExists(fullName)) {
+                continue;
+            }
             
             // Check if this is a static global variable
             if (node->declaration.type_info.is_static) {
@@ -107,7 +146,7 @@ void generateGlobalsAtMarker(FILE* asmFile) {
             // All globals already use filename prefix for uniqueness
             // For static globals, this is required for file-local linkage
             // For non-static globals, this helps avoid name collisions
-            fprintf(asmFile, "_%s_%s:\n", prefix, node->declaration.var_name);
+            fprintf(asmFile, "%s:\n", fullName);
             
             // Initialize global variables
             if (node->declaration.initializer && node->declaration.initializer->type == NODE_LITERAL) {
@@ -174,4 +213,16 @@ void cleanupGlobals() {
     }
     globalCount = 0;
     globalMarkerFound = 0;
+    
+    // Free global hash table
+    for (int i = 0; i < GLOBAL_HASH_SIZE; i++) {
+        GlobalEntry* entry = globalHashTable[i];
+        while (entry) {
+            GlobalEntry* temp = entry->next;
+            free(entry->name);
+            free(entry);
+            entry = temp;
+        }
+        globalHashTable[i] = NULL;
+    }
 }

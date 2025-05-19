@@ -8,6 +8,9 @@
 // Initialize code generator with optional origin displacement
 void initCodeGen(const char* outputFilename, unsigned int orgAddress);
 
+// Get the current function name
+const char* getCurrentFunctionName();
+
 // Close code generator
 void finalizeCodeGen();
 

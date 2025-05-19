@@ -27,6 +27,7 @@ int arrayCount = 0;
 char** arrayNames = NULL;
 int* arraySizes = NULL;
 DataType* arrayTypes = NULL;
+char** arrayFunctions = NULL; // Track function names for arrays
 // Track where the redefined arrays start
 int redefineArrayStartIndex = 0;
 
@@ -58,6 +59,11 @@ static int stackSize = 0;
 
 // Origin address for ORG directive
 static unsigned int originAddress = 0;
+
+// Get the current name of the function being generated
+const char* getCurrentFunctionName() {
+    return currentFunction ? currentFunction : "global";
+}
 
 // Clear local variables when entering a new function
 void clearLocalVars() {
@@ -140,6 +146,7 @@ void initCodeGen(const char* outputFilename, unsigned int orgAddr) {
     arrayNames = NULL;
     arraySizes = NULL;
     arrayTypes = NULL;
+    arrayFunctions = NULL; // Track function names for arrays
     arrayMarkerFound = 0;
     redefineArrayStartIndex = 0;
     
@@ -643,18 +650,24 @@ void generateVariableDeclaration(ASTNode* node) {
     if (node->declaration.type_info.is_array && node->declaration.type_info.array_size > 0) {
         // Check if this array has initializers
         if (node->declaration.initializer) {
-            fprintf(asmFile, "    ; Array with initializers\n");
-            // Generate global array with initializers at data section
+            fprintf(asmFile, "    ; Array variable with initializers: %s[%d]\n", 
+                    node->declaration.var_name, 
+                    node->declaration.type_info.array_size);
+            // Register the array with its initializers for generation at the right location
             generateArrayWithInitializers(node);
         } else {
-            // Register the array to be generated later with zeros
+            // Register the array for generation with zeros
+            fprintf(asmFile, "    ; Array variable without initializers: %s[%d]\n", 
+                    node->declaration.var_name, 
+                    node->declaration.type_info.array_size);
             addArrayDeclaration(node->declaration.var_name,
-                               node->declaration.type_info.array_size,
-                               node->declaration.type_info.type);
+                                node->declaration.type_info.array_size,
+                                node->declaration.type_info.type,
+                                currentFunction);
         }
         
-    // Set up a pointer to the array
-        fprintf(asmFile, "    ; Array variable declaration: %s[%d]\n", 
+        // Set up a pointer to the array
+        fprintf(asmFile, "    ; Setting up pointer to array %s[%d]\n", 
                 node->declaration.var_name, 
                 node->declaration.type_info.array_size);
                 
@@ -671,11 +684,20 @@ void generateVariableDeclaration(ASTNode* node) {
                 }
             }
             
-            fprintf(asmFile, "    mov ax, _%s_%s ; Address of array\n", 
-                    prefix, node->declaration.var_name);
+            // Get the array index from addArrayDeclaration (should be the most recent one)
+            int arrIndex = arrayCount - 1;
+            
+            // Generate pointer to array with full unique label (file_function_name_index)
+            fprintf(asmFile, "    mov ax, _%s_%s_%s_%d ; Address of array\n", 
+                    prefix, currentFunction ? currentFunction : "global", 
+                    node->declaration.var_name, arrIndex);
             free(prefix);
         } else {
-            fprintf(asmFile, "    mov ax, _%s ; Address of array (fallback)\n", node->declaration.var_name);
+            // Fallback with at least function name and index if we couldn't get a prefix
+            int arrIndex = arrayCount - 1;
+            fprintf(asmFile, "    mov ax, _%s_%s_%d ; Address of array (fallback)\n", 
+                    currentFunction ? currentFunction : "global", 
+                    node->declaration.var_name, arrIndex);
         }
         fprintf(asmFile, "    push ax ; Store pointer to array\n");
         
@@ -715,15 +737,16 @@ void generateGlobalDeclaration(ASTNode* node) {
     
     // Check if this is an array with a fixed size
     if (node->declaration.type_info.is_array && node->declaration.type_info.array_size > 0) {
-        // Check if array has initializers
+        // Register the array for generation at the proper location
         if (node->declaration.initializer) {
-            // Output the array with initializer values directly
+            // Register array with initializers
             generateArrayWithInitializers(node);
         } else {
-            // Register the array to be generated later at the proper location with zeros
+            // Register array without initializers
             addArrayDeclaration(node->declaration.var_name,
                                node->declaration.type_info.array_size,
-                               node->declaration.type_info.type);
+                               node->declaration.type_info.type,
+                               "global"); // Global function context
         }
         
         // No code is emitted here - arrays will be generated at the marker or at the end
