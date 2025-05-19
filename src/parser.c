@@ -137,6 +137,13 @@ ASTNode* parseDeclaration() {
     // This is used for cases like __attribute__((naked)) void func()
     FunctionInfo tempFuncInfo = {0};
     int hasAttributes = 0;
+    int isStatic = 0;
+    
+    // Check for static keyword
+    if (tokenIs(TOKEN_STATIC)) {
+        consume(TOKEN_STATIC);
+        isStatic = 1;
+    }
     
     if (tokenIs(TOKEN_ATTRIBUTE) || tokenIs(TOKEN_ATTR_OPEN)) {
         parseFunctionAttributes(&tempFuncInfo);
@@ -145,6 +152,11 @@ ASTNode* parseDeclaration() {
     
     // Parse the type
     TypeInfo typeInfo = parseType();
+    
+    // Apply storage class if static
+    if (isStatic) {
+        typeInfo.is_static = 1;
+    }
       // Get the identifier name
     if (!tokenIs(TOKEN_IDENTIFIER)) {
         Token token = getCurrentToken();
@@ -211,6 +223,7 @@ ASTNode* parseFunctionDefinition(char* name, TypeInfo returnType) {
     // Transfer function attributes from the return type
     node->function.info.is_stackframe = returnType.is_stackframe;
     node->function.info.is_far = returnType.is_far;
+    node->function.info.is_static = returnType.is_static; // Transfer static attribute
     node->function.info.is_naked = 0; // Initialize naked flag
     node->function.info.is_deprecated = 0; // Initialize deprecated flag
     node->function.info.deprecation_msg = NULL; // Initialize deprecation message
@@ -391,16 +404,25 @@ ASTNode* parseStatement() {
         return parseIfStatement();
     } else if (tokenIs(TOKEN_WHILE)) {
         // While statement
-        return parseWhileStatement();}else if (tokenIs(TOKEN_FOR)) {
+        return parseWhileStatement();
+    } else if (tokenIs(TOKEN_DO)) {
+        // Do-while statement
+        return parseDoWhileStatement();
+    }else if (tokenIs(TOKEN_FOR)) {
         // For statement
         return parseForStatement();
     } else if (tokenIs(TOKEN_RETURN)) {
         // Return statement
         return parseReturnStatement();    } else if (tokenIs(TOKEN_ASM)) {
         // Inline assembly
-        return parseInlineAssembly();
-    } else if (tokenIs(TOKEN_INT) || tokenIs(TOKEN_SHORT) || tokenIs(TOKEN_CHAR) || 
-               tokenIs(TOKEN_VOID) || tokenIs(TOKEN_UNSIGNED)) {
+        return parseInlineAssembly();    } else if (tokenIs(TOKEN_STATIC) || tokenIs(TOKEN_INT) || tokenIs(TOKEN_SHORT) || 
+               tokenIs(TOKEN_CHAR) || tokenIs(TOKEN_VOID) || tokenIs(TOKEN_UNSIGNED)) {
+        // Check for static keyword in local variable declarations
+        if (tokenIs(TOKEN_STATIC)) {
+            reportWarning(peekNextToken().pos, "Static local variables are not supported - 'static' ignored in local context");
+            consume(TOKEN_STATIC);
+        }
+        
         // Declaration
         return parseDeclaration();
     } else {

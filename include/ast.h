@@ -17,8 +17,7 @@ typedef enum {
 } DataType;
 
 // AST node types
-typedef enum {
-    NODE_PROGRAM,      // Program root
+typedef enum {    NODE_PROGRAM,      // Program root
     NODE_FUNCTION,     // Function definition
     NODE_BLOCK,        // Code block
     NODE_DECLARATION,  // Variable declaration
@@ -30,6 +29,7 @@ typedef enum {
     NODE_RETURN,       // Return statement
     NODE_IF,           // If statement
     NODE_WHILE,        // While loop
+    NODE_DO_WHILE,     // Do-while loop
     NODE_FOR,          // For loop
     NODE_CALL,         // Function call
     NODE_ASM_BLOCK,    // Inline assembly block
@@ -90,6 +90,7 @@ typedef struct {
     int array_size;
     int is_stackframe;  // Function uses stackframe with register preservation
     int is_far;         // Function is far called
+    int is_static;      // Has static storage duration
 } TypeInfo;
 
 // Function information structure
@@ -99,6 +100,7 @@ typedef struct {
     int is_stackframe;  // Uses stackframe with register preservation
     int is_far;        // Is a far function
     int is_naked;      // Function is naked (no prologue/epilogue)
+    int is_static;     // Function has internal linkage
     int is_deprecated; // Function is deprecated (1 if true)
     char* deprecation_msg; // Deprecation message (NULL if not deprecated)
 } FunctionInfo;
@@ -177,13 +179,19 @@ typedef struct ASTNode {
             struct ASTNode* condition; // Loop condition
             struct ASTNode* update;    // Update statement
             struct ASTNode* body;      // Loop body
-        } for_loop;
-          // For while loops
+        } for_loop;        // For while loops
         struct {
             struct ASTNode* condition; // Loop condition
             struct ASTNode* body;      // Loop body
         } while_loop;
-          // For if statements
+        
+        // For do-while loops
+        struct {
+            struct ASTNode* condition; // Loop condition
+            struct ASTNode* body;      // Loop body
+        } do_while_loop;
+        
+        // For if statements
         struct {
             struct ASTNode* condition; // If condition
             struct ASTNode* if_body;   // If body (true branch)

@@ -7,7 +7,7 @@
 #include <ctype.h>
 
 typedef enum {
-    // Keywords
+    // Keywords    
     TOKEN_INT,
     TOKEN_SHORT,
     TOKEN_UNSIGNED,
@@ -19,17 +19,23 @@ typedef enum {
     // Legacy attribute
     TOKEN_ATTRIBUTE,     // __attribute__
     TOKEN_NAKED,         // naked
-    TOKEN_DEPRECATED,    // deprecated
+    TOKEN_STATIC,        // static
+    TOKEN_DEPRECATED,    // deprecated    
     TOKEN_IF,
     TOKEN_ELSE,
     TOKEN_WHILE,
+    TOKEN_DO,            // do
     TOKEN_FOR,
-    TOKEN_RETURN,    TOKEN_BOOL,          // bool (C23)
+    TOKEN_RETURN,    
+    TOKEN_BOOL,          // bool (C23)
     TOKEN_TRUE,          // true (C23)
     TOKEN_FALSE,         // false (C23)
-    TOKEN_SIZEOF,        // sizeof
+    TOKEN_SIZEOF,        // sizeof    
     TOKEN_ATTR_OPEN,     // [[
     TOKEN_ATTR_CLOSE,    // ]]
+    
+    // Preprocessor directives
+    TOKEN_LINE_DIRECTIVE,  // #line
 
     // Identifiers and literals
     TOKEN_IDENTIFIER,
@@ -58,9 +64,10 @@ typedef enum {
     TOKEN_PIPE,       // |
     TOKEN_INCREMENT,  // ++
     TOKEN_DECREMENT,  // --
-    TOKEN_BITWISE_NOT,// ~
+    TOKEN_BITWISE_NOT,// ~    
     TOKEN_XOR,        // ^
     TOKEN_ARROW,      // ->
+    TOKEN_QUESTION,   // ?
 
     // Compound assignment operators
     TOKEN_PLUS_ASSIGN,  // +=

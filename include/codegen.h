@@ -3,6 +3,7 @@
 
 #include "ast.h"
 #include "string_literals.h"
+#include "error_manager.h"
 
 // Initialize code generator with optional origin displacement
 void initCodeGen(const char* outputFilename, unsigned int orgAddress);
@@ -57,6 +58,9 @@ void generateForLoop(ASTNode* node);
 
 // Generate code for a while loop
 void generateWhileLoop(ASTNode* node);
+
+// Generate code for a do-while loop
+void generateDoWhileLoop(ASTNode* node);
 
 // Generate code for an if statement
 void generateIfStatement(ASTNode* node);

@@ -14,6 +14,7 @@ void generateCode(ASTNode* root);
 void finalizeCodeGen();
 void printAST(ASTNode* node, int indent);
 extern void cleanupPreprocessor();
+extern void printLineMappings();
 
 void printUsage(const char* programName) {
     fprintf(stderr, "NCC: Nathan's C Compiler\n");
@@ -21,6 +22,7 @@ void printUsage(const char* programName) {
     fprintf(stderr, "Options:\n");
     fprintf(stderr, "  -o <file>    Output to <file> (default: output.asm)\n");
     fprintf(stderr, "  -d           Debug mode (print AST)\n");
+    fprintf(stderr, "  -dl          Debug line tracking (show preprocessor line mappings)\n");
     fprintf(stderr, "  -I<path>     Add <path> to include search paths\n");
     fprintf(stderr, "  -disp <addr> Set origin displacement address\n");
     fprintf(stderr, "  -h           Display this help and exit\n");

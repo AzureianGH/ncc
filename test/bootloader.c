@@ -1,6 +1,5 @@
 #include "test/bootloader.h"
 
-
 [[naked]] void biosInitialize() {
     __asm("cli");
     __asm("xor ax, ax");
@@ -10,8 +9,7 @@
     __asm("jmp _main");
 }
 
-[[naked]]
-[[deprecated("This function will be removed soon.")]]
+[[deprecated("This function will be removed soon."), naked]]
 void haltForever()
 {
     __asm("cli");           // Disable interrupts
@@ -22,13 +20,29 @@ void haltForever()
 void main()
 {
     clearScreen();
-    char test[] = "Hello, World!\r\n";
-    char* smaller = "Hello, Earth!\r\n";
-    writeString(test); // Hello, World!
-    strcpy(test, smaller);
-    writeString(test); // Hello, Earth!
+    writeString(itoa(1234));
     haltForever();
 }
+
+// int == 2 bytes wide
+char* itoa(int i) {
+    static char buffer[20];
+    int j = 0;
+    int isNegative = (i < 0);
+    i = isNegative ? -i : i;
+    int k = i;
+    do {
+        k /= 10;
+        j++;
+    } while (k > 0);
+    buffer[j] = '\0';
+    do {
+        buffer[--j] = (i % 10) + '0';
+        i /= 10;
+    } while (i > 0);
+    return isNegative ? (buffer[--j] = '-', buffer + j) : buffer;
+}
+
 
 void writeChar(char c)
 {
@@ -40,9 +54,7 @@ void writeChar(char c)
 
 void writeString(char* str)
 {
-    for (int i = 0; i < strlen(str); i++) {
-        writeChar(str[i]);
-    }
+    while (*str) writeChar(*str++);
 }
 
 void clearScreen()
@@ -51,19 +63,6 @@ void clearScreen()
     __asm("int 0x10");       // BIOS interrupt to set video mode
 }
 
-int strlen(char* s) {
-    char* p = s;
-    while (*p) p++;
-    return p - s;
-}
-
-
-void strcpy(char* dest, char* src) {
-    while (*src) {
-        *dest++ = *src++;
-    }
-    *dest = '\0';
-}
 
 
 [[naked]] void _NCC_STRING_LOC() {}

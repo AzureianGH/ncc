@@ -40,6 +40,9 @@ ASTNode* parseForStatement();
 // Parse a while statement
 ASTNode* parseWhileStatement();
 
+// Parse a do-while statement
+ASTNode* parseDoWhileStatement();
+
 // Parse an if statement
 ASTNode* parseIfStatement();
 
