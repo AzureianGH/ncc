@@ -9,17 +9,89 @@ __after_diskload:
 
     ; Function call to clearScreen
     call _clearScreen
-    ; Function call to enterVGAGraphicsMode
-    call _enterVGAGraphicsMode
-    ; Function call to clearGraphics
-    mov ax, 1 ; Load literal
+    ; Function call to writeString
+    ; String literal: NCC Bootloader\r\n
+    mov ax, kernel_string_0 ; Address of string
     push ax ; Argument 1
-    call _clearGraphics
+    call _writeString
     add sp, 2 ; Remove arguments
+    ; Function call to writeString
+    ; String literal: Loading kernel...\r\n
+    mov ax, kernel_string_1 ; Address of string
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Local variable declaration: a
+    ; String literal: Meow
+    mov ax, kernel_string_2 ; Address of string
+    push ax ; Initialize local variable
+    ; Local variable declaration: b
+    ; String literal: Woof
+    mov ax, kernel_string_3 ; Address of string
+    push ax ; Initialize local variable
+    ; Function call to dothing
+    mov ax, [bp-4] ; Load local variable b
+    push ax ; Argument 2
+    mov ax, [bp-2] ; Load local variable a
+    push ax ; Argument 1
+    call _dothing
+    add sp, 4 ; Remove arguments
     ; Function call to haltForever
     call _haltForever
 
 __after_diskload_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: dothing
+_dothing:
+    push bp
+    mov bp, sp
+
+    ; Function call to writeString
+    ; String literal: Doing thing...\r\n
+    mov ax, kernel_string_4 ; Address of string
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Function call to writeString
+    ; String literal: a: 
+    mov ax, kernel_string_5 ; Address of string
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Function call to writeString
+    mov ax, [bp+4] ; Load parameter a
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Function call to writeString
+    ; String literal: \r\n
+    mov ax, kernel_string_6 ; Address of string
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Function call to writeString
+    ; String literal: b: 
+    mov ax, kernel_string_7 ; Address of string
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Function call to writeString
+    mov ax, [bp+6] ; Load parameter b
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Function call to writeString
+    ; String literal: \r\n
+    mov ax, kernel_string_8 ; Address of string
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+
+_dothing_exit:
     ; Standard function epilogue
     mov sp, bp
     pop bp
@@ -40,7 +112,7 @@ _assert:
     ; If true branch
     ; Function call to writeString
     ; String literal: Assertion failed!\r\n
-    mov ax, kernel_string_0 ; Address of string
+    mov ax, kernel_string_9 ; Address of string
     push ax ; Argument 1
     call _writeString
     add sp, 2 ; Remove arguments
@@ -154,45 +226,19 @@ _writeString_exit:
     pop bp
     ret
 
-; Function: enterVGAGraphicsMode
-_enterVGAGraphicsMode:
+; Function: enterVBEGraphicsMode
+_enterVBEGraphicsMode:
     push bp
     mov bp, sp
 
     ; Inline assembly statement
-    mov ax, 0x0013
+    mov ax, 0x4F02
+    ; Inline assembly statement
+    mov bx, 0x118
     ; Inline assembly statement
     int 0x10
 
-_enterVGAGraphicsMode_exit:
-    ; Standard function epilogue
-    mov sp, bp
-    pop bp
-    ret
-
-; Function: clearGraphics
-_clearGraphics:
-    push bp
-    mov bp, sp
-
-    ; Inline assembly statement
-    mov ax, 0xA000
-    ; Inline assembly statement
-    mov es, ax
-    ; Inline assembly statement
-    xor di, di
-    ; Inline assembly statement
-    ; Inline assembly with 1 operands
-    mov ax, [bp+4] ; Load parameter color
-    mov cx, byte ax
-    ; Inline assembly statement
-    mov ax, cx
-    ; Inline assembly statement
-    mov cx, 64000
-    ; Inline assembly statement
-    rep stosb
-
-_clearGraphics_exit:
+_enterVBEGraphicsMode_exit:
     ; Standard function epilogue
     mov sp, bp
     pop bp
@@ -201,4 +247,13 @@ _clearGraphics_exit:
 
 ; Data section for strings and arrays
 ; String literals section
-kernel_string_0: db 65, 115, 115, 101, 114, 116, 105, 111, 110, 32, 102, 97, 105, 108, 101, 100, 33, 13, 10, 0  ; null terminator
+kernel_string_0: db 78, 67, 67, 32, 66, 111, 111, 116, 108, 111, 97, 100, 101, 114, 13, 10, 0  ; null terminator
+kernel_string_1: db 76, 111, 97, 100, 105, 110, 103, 32, 107, 101, 114, 110, 101, 108, 46, 46, 46, 13, 10, 0  ; null terminator
+kernel_string_2: db 77, 101, 111, 119, 0  ; null terminator
+kernel_string_3: db 87, 111, 111, 102, 0  ; null terminator
+kernel_string_4: db 68, 111, 105, 110, 103, 32, 116, 104, 105, 110, 103, 46, 46, 46, 13, 10, 0  ; null terminator
+kernel_string_5: db 97, 58, 32, 0  ; null terminator
+kernel_string_6: db 13, 10, 0  ; null terminator
+kernel_string_7: db 98, 58, 32, 0  ; null terminator
+kernel_string_8: db 13, 10, 0  ; null terminator
+kernel_string_9: db 65, 115, 115, 101, 114, 116, 105, 111, 110, 32, 102, 97, 105, 108, 101, 100, 33, 13, 10, 0  ; null terminator

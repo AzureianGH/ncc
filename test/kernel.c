@@ -1,11 +1,25 @@
+#define BITS16
 #include "test/bootloader.h"
 
 void _after_diskload() {
     clearScreen();
-    enterVGAGraphicsMode();
-    
-    clearGraphics(0x01); // Clear screen with a color (0x01 = blue)
+    writeString("NCC Bootloader\r\n");
+    writeString("Loading kernel...\r\n");      
+    char* a = "Meow";
+    char* b = "Woof";
+    dothing(a, b);
     haltForever();
+}
+
+void dothing(char* a, char* b)
+{
+    writeString("Doing thing...\r\n");
+    writeString("a: ");
+    writeString(a);
+    writeString("\r\n");
+    writeString("b: ");
+    writeString(b);
+    writeString("\r\n");
 }
 
 void assert(int condition)
@@ -43,19 +57,9 @@ void writeString(char* str)
     while (*str) writeChar(*str++);
 }
 
-void enterVGAGraphicsMode()
+void enterVBEGraphicsMode()
 {
-    __asm("mov ax, 0x0013"); // Set video mode 0x13 (320x200, 256 colors)
+    __asm("mov ax, 0x4F02"); // VBE function to set video mode
+    __asm("mov bx, 0x118");  // Mode 0x118: 1024x768, 16-bit color
     __asm("int 0x10");       // BIOS interrupt to set video mode
-}
-
-void clearGraphics(unsigned char color)
-{
-    __asm("mov ax, 0xA000"); // Segment for VGA graphics
-    __asm("mov es, ax");     // Set ES to VGA segment
-    __asm("xor di, di");     // Start at offset 0
-    __asm("mov cx, byte %0" : : "r"(color));  // Load color into AL
-    __asm("mov ax, cx");
-    __asm("mov cx, 64000");  // Number of pixels (320x200)
-    __asm("rep stosb");      // Fill with color
 }

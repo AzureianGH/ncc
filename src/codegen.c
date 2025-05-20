@@ -1148,7 +1148,7 @@ void generateFunctionCall(ASTNode* node) {
     
     fprintf(asmFile, "    ; Function call to %s\n", node->call.func_name);
     
-    // Push arguments in reverse order
+    // Count arguments and store them in an array
     int argCount = 0;
     ASTNode* arg = node->call.args;
     ASTNode* args[32]; // Maximum 32 arguments
@@ -1159,14 +1159,12 @@ void generateFunctionCall(ASTNode* node) {
         arg = arg->next;
     }
     
-    // Push arguments in reverse order
+    // Push arguments in reverse order (right-to-left) as per C calling convention
     for (int i = argCount - 1; i >= 0; i--) {
+        // Generate code for each argument (result in AX)
         generateExpression(args[i]);
         fprintf(asmFile, "    push ax ; Argument %d\n", i + 1);
     }
-    
-    // Check if it's a far call
-    // TODO: Add support for far calls with segment:offset addressing
     
     // Call the function
     fprintf(asmFile, "    call _%s\n", node->call.func_name);
@@ -1175,8 +1173,6 @@ void generateFunctionCall(ASTNode* node) {
     if (argCount > 0) {
         fprintf(asmFile, "    add sp, %d ; Remove arguments\n", argCount * 2);
     }
-    
-    // Result is already in ax
 }
 
 // Generate code for a return statement
@@ -1220,14 +1216,19 @@ void generateAsmStmt(ASTNode* node) {
     }
     
     // With operands, we need to:
-    // 1. First generate code to load the operands into registers
+    // 1. First generate code to load the input operands into registers
     // 2. Substitute %0, %1, etc. with appropriate register names
+    // 3. After the assembly code, store output operands back to their variables
     fprintf(asmFile, "    ; Inline assembly with %d operands\n", node->asm_stmt.operand_count);
     
-    // Array to store register assignments for each operand
+    // Arrays to store register assignments and operand types
     char** registers = (char**)malloc(sizeof(char*) * node->asm_stmt.operand_count);
-    if (!registers) {
+    int* isOutput = (int*)malloc(sizeof(int) * node->asm_stmt.operand_count);
+    
+    if (!registers || !isOutput) {
         fprintf(stderr, "Memory allocation failed for assembly registers\n");
+        if (registers) free(registers);
+        if (isOutput) free(isOutput);
         return;
     }
     
@@ -1237,12 +1238,25 @@ void generateAsmStmt(ASTNode* node) {
     
     // Process operands and assign registers
     for (int i = 0; i < node->asm_stmt.operand_count; i++) {
-        // Generate code to evaluate the operand
-        generateExpression(node->asm_stmt.operands[i]);
-        
         // Check constraint type
         char* constraint = node->asm_stmt.constraints[i];
-        if (constraint[0] == 'r') {
+        
+        // Determine if this is an output operand (constraint starts with =)
+        isOutput[i] = (constraint[0] == '=');
+        
+        // Skip the = for output operands to get the actual constraint
+        if (isOutput[i]) {
+            constraint++;
+        }
+        
+        // Process input operands - generate code to load them
+        if (!isOutput[i]) {
+            // Generate code to evaluate the operand
+            generateExpression(node->asm_stmt.operands[i]);
+        }
+        
+        // Assign register based on constraint
+        if (*constraint == 'r') {
             // Register constraint: assign a register
             if (reg_index < 6) {
                 registers[i] = strdup(reg_choices[reg_index++]);
@@ -1251,9 +1265,9 @@ void generateAsmStmt(ASTNode* node) {
                 registers[i] = strdup("ax");
             }
             
-            // Move result to the assigned register if it's not already in ax
-            if (strcmp(registers[i], "ax") != 0) {
-                fprintf(asmFile, "    mov %s, ax ; Load operand %d into register\n", 
+            // For input operands, move result to the assigned register
+            if (!isOutput[i] && strcmp(registers[i], "ax") != 0) {
+                fprintf(asmFile, "    mov %s, ax ; Load input operand %d into register\n", 
                         registers[i], i);
             }
         } else {
@@ -1272,6 +1286,7 @@ void generateAsmStmt(ASTNode* node) {
             free(registers[i]);
         }
         free(registers);
+        free(isOutput);
         return;
     }
     
@@ -1301,9 +1316,36 @@ void generateAsmStmt(ASTNode* node) {
     // Output the processed assembly code
     fprintf(asmFile, "    %s\n", result);
     
+    // After executing the assembly code, store output operands back to their variables
+    for (int i = 0; i < node->asm_stmt.operand_count; i++) {
+        if (isOutput[i]) {
+            // This is an output operand - store the register value back to the variable
+            ASTNode* operand = node->asm_stmt.operands[i];
+            
+            if (operand->type == NODE_IDENTIFIER) {
+                // Get variable name and offset
+                char* varName = operand->identifier;
+                int offset = getVariableOffset(varName);
+                
+                // Check if it's a parameter or local variable
+                if (isParameter(varName)) {
+                    fprintf(asmFile, "    mov [bp+%d], %s ; Store output operand %d to parameter %s\n", 
+                            -offset, registers[i], i, varName);
+                } else {
+                    fprintf(asmFile, "    mov [bp-%d], %s ; Store output operand %d to local variable %s\n", 
+                            offset, registers[i], i, varName);
+                }
+            } else {
+                // For complex output expressions (dereferencing pointers, etc.)
+                fprintf(asmFile, "    ; Warning: Complex output operand not fully supported\n");
+            }
+        }
+    }
+    
     // Clean up
     free(asmCode);
     free(result);
+    free(isOutput);
     for (int i = 0; i < node->asm_stmt.operand_count; i++) {
         free(registers[i]);
     }

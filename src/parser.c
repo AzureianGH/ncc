@@ -375,8 +375,14 @@ ASTNode* parseBlock() {
     return node;
 }
 ASTNode* parseInlineAssembly() {
-    expect(TOKEN_ASM); // Assuming TOKEN_ASM is the token for __asm
+    expect(TOKEN_ASM); // Consume the __asm token
 
+    // Check for block-style syntax: __asm { ... }
+    if (tokenIs(TOKEN_LBRACE)) {
+        return parseAsmBlock();
+    }
+
+    // Traditional syntax: __asm("instruction")
     ASTNode* node = createNode(NODE_ASM);
     
     // Initialize operand-related fields
@@ -890,8 +896,7 @@ ASTNode* parsePrimaryExpression() {
                 }
                 current = current->next;
             }
-            
-            consume(TOKEN_LPAREN);
+              consume(TOKEN_LPAREN);
             
             // Parse arguments
             ASTNode* argList = NULL;
@@ -900,7 +905,7 @@ ASTNode* parsePrimaryExpression() {
             
             if (!tokenIs(TOKEN_RPAREN)) {
                 // First argument
-                ASTNode* arg = parseExpression();
+                ASTNode* arg = parseAssignmentExpression();  // Use assignment expression for arguments
                 argList = arg;
                 lastArg = arg;
                 argCount++;
@@ -908,7 +913,7 @@ ASTNode* parsePrimaryExpression() {
                 // Additional arguments
                 while (tokenIs(TOKEN_COMMA)) {
                     consume(TOKEN_COMMA);
-                    arg = parseExpression();
+                    arg = parseAssignmentExpression();  // Use assignment expression for arguments
                     lastArg->next = arg;
                     lastArg = arg;
                     argCount++;
