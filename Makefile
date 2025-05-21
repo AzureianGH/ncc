@@ -44,9 +44,23 @@ test_os:
 
 	qemu-system-x86_64 -fda test\floppy.img
 
+# Test the variadic arguments implementation
+test_variadic:
+	bin/ncc -disp 0x7C00 -I.\test .\test\bootloader.c -o .\test\bootloader.asm
+	nasm -f bin .\test\bootloader.asm -o .\test\bootloader.bin
+
+	bin/ncc -disp 0x8000 -I.\test .\test\test_variadic.c -o .\test\kernel.asm
+	nasm -f bin .\test\kernel.asm -o .\test\kernel.bin
+
+	dd if=/dev/zero of=test\floppy.img bs=512 count=2880
+	dd if=test\bootloader.bin of=test\floppy.img conv=notrunc
+	dd if=test\kernel.bin of=test\floppy.img bs=512 seek=1 conv=notrunc
+
+	qemu-system-x86_64 -fda test\floppy.img
+
 # Build a quiet version of the compiler (less verbose output)
 quiet:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="$(CFLAGS) $(QUIET_FLAG)"
 
-.PHONY: all clean run test quiet
+.PHONY: all clean run test quiet test_variadic

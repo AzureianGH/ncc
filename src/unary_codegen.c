@@ -605,6 +605,55 @@ void generateUnaryOp(ASTNode* node) {
             }
             break;
             
+        case UNARY_CAST:
+            // Generate code for the operand first
+            generateExpression(node->right);
+            
+            // Handle different cast types
+            switch (node->unary_op.cast_type) {
+                case TYPE_UNSIGNED_CHAR:
+                    // For unsigned char, zero-extend after masking to byte
+                    fprintf(asmFile, "    ; Cast to unsigned char\n");
+                    fprintf(asmFile, "    and ax, 0xFF ; Mask to byte\n");
+                    break;
+                    
+                case TYPE_CHAR:
+                    // For signed char, sign-extend after getting bottom byte
+                    fprintf(asmFile, "    ; Cast to signed char\n");
+                    fprintf(asmFile, "    movsx ax, al ; Sign extend the bottom byte\n");
+                    break;
+                    
+                case TYPE_UNSIGNED_INT:
+                case TYPE_UNSIGNED_SHORT:
+                    // For unsigned int/short, just keep the value in AX
+                    fprintf(asmFile, "    ; Cast to unsigned int/short\n");
+                    // No operation needed, 16-bit value in AX is already the right format
+                    break;
+                    
+                case TYPE_INT:
+                case TYPE_SHORT:
+                    // For int/short, the value is already in the right format (AX)
+                    fprintf(asmFile, "    ; Cast to signed int/short\n");
+                    // No operation needed for 16-bit signed integers
+                    break;
+                    
+                case TYPE_BOOL:
+                    // For bool, test for non-zero and set result to 0 or 1
+                    fprintf(asmFile, "    ; Cast to bool\n");
+                    fprintf(asmFile, "    test ax, ax ; Check if not zero\n");
+                    fprintf(asmFile, "    mov ax, 0 ; Default to false\n");
+                    fprintf(asmFile, "    jz cast_bool_end_%d\n", labelCounter);
+                    fprintf(asmFile, "    mov ax, 1 ; Set to true if non-zero\n");
+                    fprintf(asmFile, "cast_bool_end_%d:\n", labelCounter++);
+                    break;
+                    
+                default:
+                    // Default behavior for other types
+                    fprintf(asmFile, "    ; Unhandled cast type: %d\n", node->unary_op.cast_type);
+                    break;
+            }
+            break;
+            
         default:
             reportWarning(-1, "Unsupported unary operator: %d", node->unary_op.op);
             break;

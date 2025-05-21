@@ -279,7 +279,15 @@ Token getNextToken() {
     if (source[position] == '[' && source[position+1] == '[') {
         token.type = TOKEN_ATTR_OPEN;
         position += 2;
-        column += 2;
+        column += 2;        token.line = line;
+        token.column = startColumn;
+        return token;
+    }
+    // Handle ellipsis (...)
+    if (source[position] == '.' && source[position+1] == '.' && source[position+2] == '.') {
+        token.type = TOKEN_ELLIPSIS;
+        position += 3;
+        column += 3;
         token.line = line;
         token.column = startColumn;
         return token;
@@ -565,4 +573,16 @@ void syntaxError(const char* message) {
     // Use the error manager to report the error
     reportError(position, "Syntax error: %s", message);
     exit(1);
+}
+
+// Get current token position for backtracking
+int getTokenPosition() {
+    return position;
+}
+
+// Set token position for backtracking
+void setTokenPosition(int pos) {
+    position = pos;
+    // Must reset current token to ensure next getCurrentToken starts from the new position
+    currentToken.type = TOKEN_EOF; // Use TOKEN_EOF as a marker for reset
 }

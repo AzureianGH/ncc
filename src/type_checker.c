@@ -141,6 +141,21 @@ TypeInfo* getTypeInfoFromExpression(ASTNode* expr) {
             
             return &derefTypeInfo;
         }
+        
+        // Handle type casting
+        if (expr->unary_op.op == UNARY_CAST) {
+            static TypeInfo castTypeInfo;
+            memset(&castTypeInfo, 0, sizeof(TypeInfo));
+            
+            // Set the type information based on the cast type
+            castTypeInfo.type = expr->unary_op.cast_type;
+            // For now, we're not handling casting to pointers
+            castTypeInfo.is_pointer = 0;
+            castTypeInfo.is_far_pointer = 0;
+            castTypeInfo.is_array = 0;
+            
+            return &castTypeInfo;
+        }
     }
     
     // For binary operations, type depends on the operation

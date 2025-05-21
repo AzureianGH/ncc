@@ -29,10 +29,12 @@ typedef enum {
     TOKEN_RETURN,    
     TOKEN_BOOL,          // bool (C23)
     TOKEN_TRUE,          // true (C23)
-    TOKEN_FALSE,         // false (C23)
+    TOKEN_FALSE,         // false (C23)    
+    
     TOKEN_SIZEOF,        // sizeof    
     TOKEN_ATTR_OPEN,     // [[
     TOKEN_ATTR_CLOSE,    // ]]
+    TOKEN_ELLIPSIS,      // ...
     
     // Preprocessor directives
     TOKEN_LINE_DIRECTIVE,  // #line
@@ -123,5 +125,9 @@ char* consumeAndGetValue(TokenType type);
 
 // Report a syntax error
 void syntaxError(const char* message);
+
+// Position tracking functions for backtracking
+int getTokenPosition();
+void setTokenPosition(int pos);
 
 #endif // LEXER_H

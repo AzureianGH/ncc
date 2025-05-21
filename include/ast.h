@@ -74,6 +74,7 @@ typedef enum {
     UNARY_NOT,           // !x
     UNARY_BITWISE_NOT,   // ~x
     UNARY_SIZEOF,        // sizeof(x)
+    UNARY_CAST,          // (type)x
     PREFIX_INCREMENT,    // ++x
     PREFIX_DECREMENT,    // --x
     POSTFIX_INCREMENT,   // x++
@@ -105,6 +106,7 @@ typedef struct {
     int is_static;     // Function has internal linkage
     int is_deprecated; // Function is deprecated (1 if true)
     char* deprecation_msg; // Deprecation message (NULL if not deprecated)
+    int is_variadic;   // Function accepts variable arguments (...)
 } FunctionInfo;
 
 // AST Node structure
@@ -143,10 +145,10 @@ typedef struct ASTNode {
         struct {
             OperatorType op;
         } operation;
-        
-        // For unary operations
+          // For unary operations
         struct {
             UnaryOperatorType op;
+            DataType cast_type;   // For UNARY_CAST operations
         } unary_op;
         // For function definitions
         struct {

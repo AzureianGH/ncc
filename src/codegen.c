@@ -414,8 +414,7 @@ void generateFunction(ASTNode* node) {
         fprintf(asmFile, "    push bp\n");
         fprintf(asmFile, "    mov bp, sp\n\n");
     }
-    
-    // Add function parameters to local variable table
+      // Add function parameters to local variable table
     // Parameters start at bp+4 (return address is at bp+2)
     int paramOffset = 4;
     ASTNode* param = node->function.params;
@@ -426,11 +425,36 @@ void generateFunction(ASTNode* node) {
             localVars[localVarCount].name = strdup(param->declaration.var_name);
             localVars[localVarCount].offset = -paramOffset; // Negative offset means it's a parameter
             localVarCount++;
-            
-            // Parameters always take 2 bytes on the stack in 16-bit mode
+              // Parameters always take 2 bytes on the stack in 16-bit mode
             paramOffset += 2;
         }
         param = param->next;
+    }
+    
+    // For variadic functions, add a comment about how to access additional arguments
+    if (node->function.info.is_variadic) {
+        fprintf(asmFile, "    ; This is a variadic function with %d fixed parameters\n", node->function.info.param_count);
+        fprintf(asmFile, "    ; Variable arguments start at [bp+%d]\n", paramOffset);
+        fprintf(asmFile, "    ; Use the va_XXX macros from stdarg.h to access variable arguments\n");
+        fprintf(asmFile, "    ; Example: va_list args; va_start(args, last_param); value = va_arg(args, type);\n");
+        
+        // If we're in debug mode, add detailed stack layout information
+        #ifndef QUIET_MODE
+        fprintf(asmFile, "    ; Stack layout for varargs:\n");
+        fprintf(asmFile, "    ; [bp+0] = Previous BP\n");
+        fprintf(asmFile, "    ; [bp+2] = Return address\n");
+        fprintf(asmFile, "    ; [bp+4] = First parameter\n");
+        
+        int offset = 4; // Start at first parameter
+        for (int i = 0; i < node->function.info.param_count; i++) {
+            fprintf(asmFile, "    ; [bp+%d] = Parameter %d\n", offset, i);
+            offset += 2; // Assuming 2 bytes per parameter
+        }
+        
+        fprintf(asmFile, "    ; [bp+%d] = First variable argument\n", offset);
+        fprintf(asmFile, "    ; [bp+%d] = Second variable argument\n", offset + 2);
+        fprintf(asmFile, "    ; ... and so on\n");
+        #endif
     }
     
     // Generate code for function body

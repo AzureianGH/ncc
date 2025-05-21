@@ -66,8 +66,9 @@ TypeInfo parseType() {
                 consume(TOKEN_FARCALLED);
             }
             typeInfo.is_far = 1;
-        }
-    }    // Parse base type
+        }    }
+    
+    // Parse base type
     if (tokenIs(TOKEN_INT)) {
         consume(TOKEN_INT);
         typeInfo.type = isUnsigned ? TYPE_UNSIGNED_INT : TYPE_INT;
@@ -83,6 +84,9 @@ TypeInfo parseType() {
     } else if (tokenIs(TOKEN_VOID)) {
         consume(TOKEN_VOID);
         typeInfo.type = TYPE_VOID;
+    } else if (isUnsigned) {
+        // If only 'unsigned' is specified without another type, default to unsigned int
+        typeInfo.type = TYPE_UNSIGNED_INT;
     } else {
         Token token = getCurrentToken();
         reportError(token.pos, "Expected type specifier");
@@ -221,12 +225,12 @@ ASTNode* parseFunctionDefinition(char* name, TypeInfo returnType) {
     node->function.info.return_type = returnType;
     
     // Transfer function attributes from the return type
-    node->function.info.is_stackframe = returnType.is_stackframe;
-    node->function.info.is_far = returnType.is_far;
+    node->function.info.is_stackframe = returnType.is_stackframe;    node->function.info.is_far = returnType.is_far;
     node->function.info.is_static = returnType.is_static; // Transfer static attribute
     node->function.info.is_naked = 0; // Initialize naked flag
     node->function.info.is_deprecated = 0; // Initialize deprecated flag
     node->function.info.deprecation_msg = NULL; // Initialize deprecation message
+    node->function.info.is_variadic = 0; // Initialize variadic flag
     
     // Allow __attribute__ between return type and parameter list
     if (tokenIs(TOKEN_ATTRIBUTE) || tokenIs(TOKEN_ATTR_OPEN)) {
@@ -246,6 +250,14 @@ ASTNode* parseFunctionDefinition(char* name, TypeInfo returnType) {
         
         while (tokenIs(TOKEN_COMMA)) {
             consume(TOKEN_COMMA);
+            
+            // Check for variadic arguments (...) 
+            if (tokenIs(TOKEN_ELLIPSIS)) {
+                consume(TOKEN_ELLIPSIS);
+                node->function.info.is_variadic = 1;
+                break; // Ellipsis must be the last parameter
+            }
+            
             ASTNode* param = parseParameter();
             lastParam->next = param;
             lastParam = param;
@@ -785,13 +797,12 @@ ASTNode* parseMultiplicativeExpression() {
             op = OP_MUL;
         } else if (tokenIs(TOKEN_SLASH)) {
             consume(TOKEN_SLASH);
-            op = OP_DIV;
-        } else {
+            op = OP_DIV;        } else {
             consume(TOKEN_PERCENT);
             op = OP_MOD;
         }
         
-        ASTNode* right = parsePrimaryExpression();
+        ASTNode* right = parseUnaryExpression();
         
         ASTNode* node = createNode(NODE_BINARY_OP);
         node->operation.op = op;
@@ -1013,4 +1024,13 @@ ASTNode* parsePrimaryExpression() {
         exit(1);
         return NULL;  // To avoid compiler warning
     }
+}
+
+// Save and restore parser position (for lookahead)
+int getCurrentPosition() {
+    return getTokenPosition();
+}
+
+void setPosition(int pos) {
+    setTokenPosition(pos);
 }

@@ -103,4 +103,8 @@ ASTNode* parseShiftExpression();
 // Is a type name
 int isTypeName(Token token);
 
+// Token position functions for lookahead and backtracking
+int getCurrentPosition();
+void setPosition(int pos);
+
 #endif // PARSER_H

@@ -1,26 +1,17 @@
 #define BITS16
 #include "test/bootloader.h"
+#include "test/stdarg.h"
 
 void _after_diskload() {
     clearScreen();
     writeString("NCC Bootloader\r\n");
-    writeString("Loading kernel...\r\n");      
-    char* a = "Meow";
-    char* b = "Woof";
-    dothing(a, b);
+    writeString("Loading kernel...\r\n");
+    writeString("Integer to string: ");
+    writeString(stoa_dec(1234));
+
     haltForever();
 }
 
-void dothing(char* a, char* b)
-{
-    writeString("Doing thing...\r\n");
-    writeString("a: ");
-    writeString(a);
-    writeString("\r\n");
-    writeString("b: ");
-    writeString(b);
-    writeString("\r\n");
-}
 
 void assert(int condition)
 {
@@ -62,4 +53,22 @@ void enterVBEGraphicsMode()
     __asm("mov ax, 0x4F02"); // VBE function to set video mode
     __asm("mov bx, 0x118");  // Mode 0x118: 1024x768, 16-bit color
     __asm("int 0x10");       // BIOS interrupt to set video mode
+}
+
+int strlen(char* str)
+{
+    int len = 0;
+    while (str && str[len]) len++;
+    return len;
+}
+
+char* stoa_hex(short value)
+{
+    static char buffer[5];
+    for (int i = 0; i < 4; i++) {
+        int nibble = (value >> ((3 - i) * 4)) & 0xF;
+        buffer[i] = nibble < 10 ? ('0' + nibble) : ('A' + nibble - 10);
+    }
+    buffer[4] = '\0';
+    return buffer;
 }

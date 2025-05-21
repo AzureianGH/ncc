@@ -7,7 +7,7 @@
 
     // BIOS read 3 sectors from drive 0x00 into 0x0000:8000
     __asm("mov ah, 0x02");   // Read sectors
-    __asm("mov al, 0x03");   // Number of sectors
+    __asm("mov al, 0x06");   // Number of sectors
     __asm("mov ch, 0x00");   // Cylinder
     __asm("mov cl, 0x02");   // Sector (start at sector 2)
     __asm("mov dh, 0x00");   // Head
