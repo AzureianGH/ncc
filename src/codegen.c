@@ -547,16 +547,39 @@ void generateStatement(ASTNode* node) {
                         break;
                     case OP_MUL_ASSIGN:
                         fprintf(asmFile, "    imul bx ; *=\n");
-                        break;
+                        break;                    
+                        
                     case OP_DIV_ASSIGN:
-                        fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for division\n");
-                        fprintf(asmFile, "    idiv bx ; /=\n");
+                        {
+                            // Check if variable is unsigned
+                            TypeInfo* typeInfo = getTypeInfo(node->left->identifier);
+                            if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
+                                          typeInfo->type == TYPE_UNSIGNED_SHORT ||
+                                          typeInfo->type == TYPE_UNSIGNED_CHAR)) {
+                                fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned division\n");
+                                fprintf(asmFile, "    div bx ; /= (unsigned)\n");
+                            } else {
+                                fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for division\n");
+                                fprintf(asmFile, "    idiv bx ; /=\n");
+                            }
+                        }
                         break;
                     case OP_MOD_ASSIGN:
-                        fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for mod\n");
-                        fprintf(asmFile, "    idiv bx ;\n");
-                        fprintf(asmFile, "    mov ax, dx ; remainder in DX\n");
-                        break;
+                        {
+                            // Check if variable is unsigned
+                            TypeInfo* typeInfo = getTypeInfo(node->left->identifier);
+                            if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
+                                          typeInfo->type == TYPE_UNSIGNED_SHORT ||
+                                          typeInfo->type == TYPE_UNSIGNED_CHAR)) {
+                                fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned mod\n");
+                                fprintf(asmFile, "    div bx ; (unsigned)\n");
+                                fprintf(asmFile, "    mov ax, dx ; remainder in DX\n");
+                            } else {
+                                fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for mod\n");
+                                fprintf(asmFile, "    idiv bx ;\n");
+                                fprintf(asmFile, "    mov ax, dx ; remainder in DX\n");
+                            }
+                        }
                     default:
                         break;
                 }
@@ -1028,15 +1051,35 @@ void generateBinaryOp(ASTNode* node) {
             
         case OP_MUL:
             fprintf(asmFile, "    imul bx ; Multiplication (signed)\n");
-            break;
-        case OP_DIV:
-            fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX\n");
-            fprintf(asmFile, "    idiv bx ; Division (signed)\n");
+            break;        case OP_DIV:
+            {
+                TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
+                if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
+                                 typeInfo->type == TYPE_UNSIGNED_SHORT || 
+                                 typeInfo->type == TYPE_UNSIGNED_CHAR)) {
+                    fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned division\n");
+                    fprintf(asmFile, "    div bx ; Division (unsigned)\n");
+                } else {
+                    fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for division\n");
+                    fprintf(asmFile, "    idiv bx ; Division (signed)\n");
+                }
+            }
             break;
         case OP_MOD:
-            fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX\n");
-            fprintf(asmFile, "    idiv bx ; Division (signed)\n");
-            fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
+            {
+                TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
+                if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
+                                 typeInfo->type == TYPE_UNSIGNED_SHORT || 
+                                 typeInfo->type == TYPE_UNSIGNED_CHAR)) {
+                    fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned mod\n");
+                    fprintf(asmFile, "    div bx ; Division (unsigned)\n");
+                    fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
+                } else {
+                    fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for signed mod\n");
+                    fprintf(asmFile, "    idiv bx ; Division (signed)\n");
+                    fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
+                }
+            }
             break;
               // Comparison operators for 8086 (without setcc instructions)
         case OP_EQ:

@@ -7,7 +7,7 @@ void _after_diskload() {
     writeString("NCC Bootloader\r\n");
     writeString("Loading kernel...\r\n");
     writeString("Integer to string: ");
-    writeString(stoa_dec(1234));
+    writeString(stoa_hex(0x1234));
 
     haltForever();
 }
@@ -62,13 +62,45 @@ int strlen(char* str)
     return len;
 }
 
-char* stoa_hex(short value)
-{
-    static char buffer[5];
-    for (int i = 0; i < 4; i++) {
-        int nibble = (value >> ((3 - i) * 4)) & 0xF;
-        buffer[i] = nibble < 10 ? ('0' + nibble) : ('A' + nibble - 10);
+char* stoa(short i) {
+    static char buffer[20];
+    int j = 0;
+    if (i < 0) {
+        buffer[j++] = '-';
+        i = -i;
     }
-    buffer[4] = '\0';
+    if (i == 0) {
+        buffer[j++] = '0';
+    } else {
+        int k = i;
+        while (k > 0) {
+            k /= 10;
+            j++;
+        }
+        buffer[j] = '\0';
+        while (i > 0) {
+            buffer[--j] = i % 10 + '0';
+            i /= 10;
+        }
+    }
+    return buffer;
+}
+// int == 2 bytes
+char* stoa_hex(short i)
+{
+
+    char buffer[7];
+    // rudimentary hex conversion per nibble
+    buffer[0] = '0';
+    buffer[1] = 'x';
+    buffer[6] = '\0';
+    buffer[5] = (i & 0x0F) + '0';
+    if (buffer[5] > '9') buffer[5] += 7; // convert to hex char
+    buffer[4] = ((i >> 4) & 0x0F) + '0';
+    if (buffer[4] > '9') buffer[4] += 7; // convert to hex char
+    buffer[3] = ((i >> 8) & 0x0F) + '0';
+    if (buffer[3] > '9') buffer[3] += 7; // convert to hex char
+    buffer[2] = ((i >> 12) & 0x0F) + '0';
+    if (buffer[2] > '9') buffer[2] += 7; // convert to hex char
     return buffer;
 }
