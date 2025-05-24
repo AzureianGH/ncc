@@ -37,7 +37,7 @@ void initPreprocessor() {
     // Define some built-in macros
     defineMacro("__NCC__", "65536");      // Compiler ID
     defineMacro("__NCC_MAJOR__", "0");    // Major version
-    defineMacro("__NCC_MINOR__", "42");   // Minor version
+    defineMacro("__NCC_MINOR__", "183");   // Minor version
     // 0.45v
     defineMacro("__x86_16__", "1");
 
@@ -543,7 +543,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         // Find and process the include file
         char* resolvedPath = findIncludeFile(includePath, isSystemHeader);
         if (!resolvedPath) {
-            fprintf(stderr, "Error: Cannot find include file '%s'\n", includePath);
+            reportError(-1, "Cannot find include file '%s'", includePath);
             return;
         }
         

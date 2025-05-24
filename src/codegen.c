@@ -4,6 +4,8 @@
 #include "error_manager.h"
 #include "global_variables.h"
 #include "type_checker.h"
+#include "struct_support.h"
+#include "struct_codegen.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -76,6 +78,16 @@ void clearLocalVars() {
     stackSize = 0;
 }
 
+// Get the stack offset for a local variable, return 0 if not found (global)
+int getLocalVarOffset(const char* name) {
+    for (int i = 0; i < localVarCount; i++) {
+        if (localVars[i].name && strcmp(localVars[i].name, name) == 0) {
+            return localVars[i].offset;
+        }
+    }
+    return 0;  // Not a local variable
+}
+
 // gcc disable unused variable warnings
 #ifdef __GNUC__
 #pragma GCC diagnostic ignored "-Wunused-parameter"
@@ -89,9 +101,10 @@ int addLocalVariable(const char* name, int size) {
         exit(1);
     }
       
-    // Always use word-sized (2-byte) allocations on the stack for x86
+    // For long/unsigned long, allocate 4 bytes
+    // For other types, use word-sized (2-byte) allocations on the stack for x86
     // This ensures proper alignment and simplifies address calculations
-    int allocationSize = 2; // Always allocate at least 2 bytes (word-sized)
+    int allocationSize = size == 4 ? 4 : 2; // Allocate 4 bytes for long types, 2 bytes for others
     
     stackSize += allocationSize;
     localVars[localVarCount].name = strdup(name);
@@ -520,15 +533,38 @@ void generateStatement(ASTNode* node) {
               case NODE_ASSIGNMENT:
             fprintf(asmFile, "    ; Assignment statement\n");
             // Generate code for right-hand side
-            if (node->assignment.op != 0 && node->left->type == NODE_IDENTIFIER) {
-                // Compound assignment: compute old value and RHS
+            if (node->assignment.op != 0 && node->left->type == NODE_IDENTIFIER) {                // Compound assignment: compute old value and RHS
                 // Load current LHS value
+                int varOffset = getVariableOffset(node->left->identifier);
                 if (isParameter(node->left->identifier)) {
                     fprintf(asmFile, "    mov ax, [bp+%d] ; Load parameter %s for compound assignment\n", 
-                            -getVariableOffset(node->left->identifier), node->left->identifier);
-                } else {
+                            -varOffset, node->left->identifier);
+                } else if (varOffset > 0) {
                     fprintf(asmFile, "    mov ax, [bp-%d] ; Load local variable %s for compound assignment\n", 
-                            getVariableOffset(node->left->identifier), node->left->identifier);
+                            varOffset, node->left->identifier);
+                } else {
+                    // Load from global variable
+                    // Get sanitized filename prefix
+                    const char* filename = getCurrentSourceFilename();
+                    char* prefix = (char*)malloc(strlen(filename) + 1);
+                    if (prefix) {
+                        strcpy(prefix, filename);
+                        char* dot = strrchr(prefix, '.');
+                        if (dot) *dot = '\0';
+                        for (char* c = prefix; *c; c++) {
+                            if (!isalnum(*c) && *c != '_') {
+                                *c = '_';
+                            }
+                        }
+                        
+                        fprintf(asmFile, "    ; Loading global variable %s for compound assignment\n", node->left->identifier);
+                        fprintf(asmFile, "    mov ax, [_%s_%s] ; Load global variable\n", 
+                                prefix, node->left->identifier);
+                        free(prefix);
+                    } else {
+                        fprintf(asmFile, "    ; Loading global variable %s for compound assignment\n", node->left->identifier);
+                        fprintf(asmFile, "    mov ax, [_%s] ; Load global variable (fallback)\n", node->left->identifier);
+                    }
                 }
                 fprintf(asmFile, "    push ax ; Save old value\n");
                 // Evaluate RHS
@@ -589,21 +625,43 @@ void generateStatement(ASTNode* node) {
             } else {
                 // Other targets or ops: fallback to simple RHS
                 generateExpression(node->right);
-            }
-
-            // Store result in AX to the left-hand side
+            }            // Store result in AX to the left-hand side
             if (node->left->type == NODE_IDENTIFIER) {
                 // Check if this is a parameter or local variable
+                int varOffset = getVariableOffset(node->left->identifier);
                 if (isParameter(node->left->identifier)) {
                     // Parameters have positive offsets from bp
                     fprintf(asmFile, "    mov [bp+%d], ax ; Store in parameter %s\n", 
-                            -getVariableOffset(node->left->identifier), node->left->identifier);
-                } else {
+                            -varOffset, node->left->identifier);
+                } else if (varOffset > 0) {
                     // Local variables have negative offsets from bp
                     fprintf(asmFile, "    mov [bp-%d], ax ; Store in local variable %s\n", 
-                            getVariableOffset(node->left->identifier), node->left->identifier);
+                            varOffset, node->left->identifier);
+                } else {
+                    // Must be a global variable
+                    // Get sanitized filename prefix
+                    const char* filename = getCurrentSourceFilename();
+                    char* prefix = (char*)malloc(strlen(filename) + 1);
+                    if (prefix) {
+                        strcpy(prefix, filename);
+                        char* dot = strrchr(prefix, '.');
+                        if (dot) *dot = '\0';
+                        for (char* c = prefix; *c; c++) {
+                            if (!isalnum(*c) && *c != '_') {
+                                *c = '_';
+                            }
+                        }
+                        
+                        fprintf(asmFile, "    mov [_%s_%s], ax ; Store in global variable %s\n", 
+                                prefix, node->left->identifier, node->left->identifier);
+                        free(prefix);
+                    } else {
+                        // Fallback if memory allocation fails
+                        fprintf(asmFile, "    mov [_%s], ax ; Store in global variable %s (fallback)\n", 
+                                node->left->identifier, node->left->identifier);
+                    }
                 }
-            }            else if (node->left->type == NODE_UNARY_OP && node->left->unary_op.op == UNARY_DEREFERENCE) {
+            }else if (node->left->type == NODE_UNARY_OP && node->left->unary_op.op == UNARY_DEREFERENCE) {
                 // Pointer assignment (e.g., *ptr = value)
                 // Save the right-hand side result temporarily
                 fprintf(asmFile, "    push ax ; Save right-hand side value\n");
@@ -755,23 +813,128 @@ void generateVariableDeclaration(ASTNode* node) {
     }
     
     // For non-array local variables, proceed as before
-    fprintf(asmFile, "    ; Local variable declaration: %s\n", node->declaration.var_name);
-    
-    // Determine variable size based on type
+    fprintf(asmFile, "    ; Local variable declaration: %s\n", node->declaration.var_name);    // Determine variable size based on type
     int varSize = 2; // Default for int, short
     if (node->declaration.type_info.type == TYPE_CHAR || 
         node->declaration.type_info.type == TYPE_UNSIGNED_CHAR) {
         varSize = 1;
+    } else if (node->declaration.type_info.type == TYPE_LONG || 
+              node->declaration.type_info.type == TYPE_UNSIGNED_LONG) {
+        varSize = 4; // 32-bit size for long types
+    } else if (node->declaration.type_info.type == TYPE_STRUCT && 
+              node->declaration.type_info.struct_info) {
+        // For structs, use the calculated struct size
+        varSize = node->declaration.type_info.struct_info->size;
     }    // If there's an initializer, generate code for the assignment
     if (node->declaration.initializer) {
-        // Generate the value
-        generateExpression(node->declaration.initializer);
-        
-        // For regular values, just push AX (char_test.c now uses regular pointers)
-        fprintf(asmFile, "    push ax ; Initialize local variable\n");
+        // For struct initializers, we need to handle each member
+        if (node->declaration.type_info.type == TYPE_STRUCT && 
+            node->declaration.type_info.struct_info) {
+            
+            StructInfo* structInfo = node->declaration.type_info.struct_info;
+            
+            // Check if we have a compound initializer (brace-enclosed)
+            if (node->declaration.initializer->next) {
+                // This is a compound initializer with values for each field
+                ASTNode* initValue = node->declaration.initializer;
+                StructMember* member = structInfo->members;
+                
+                // Calculate the total struct size to reserve space
+                int structSize = structInfo->size;
+                
+                // Reserve space for the struct on stack
+                if (structSize >= 2) {
+                    fprintf(asmFile, "    sub sp, %d  ; Reserve space for struct\n", structSize);
+                } else {
+                    fprintf(asmFile, "    push 0      ; Reserve space for small struct\n");
+                }
+                
+                // Initialize each member with the corresponding initializer
+                int offset = 0;
+                while (initValue && member) {
+                    // Generate the member initializer value
+                    generateExpression(initValue);
+                    
+                    // Determine base pointer and offset for storing member
+                    int memberOffset = member->offset;
+                    
+                    // Store the value in the appropriate member location
+                    if (member->type_info.type == TYPE_CHAR || 
+                        member->type_info.type == TYPE_UNSIGNED_CHAR || 
+                        member->type_info.type == TYPE_BOOL) {
+                        fprintf(asmFile, "    mov byte ptr [bp-%d-%d], al  ; Initialize struct member %s\n", 
+                                stackSize, memberOffset, member->name);
+                    } else if (member->type_info.type == TYPE_LONG || 
+                              member->type_info.type == TYPE_UNSIGNED_LONG) {
+                        // Assume 32-bit value in dx:ax
+                        fprintf(asmFile, "    mov word ptr [bp-%d-%d], ax  ; Initialize struct member %s low word\n", 
+                                stackSize, memberOffset, member->name);
+                        fprintf(asmFile, "    mov word ptr [bp-%d-%d], dx  ; Initialize struct member %s high word\n", 
+                                stackSize, memberOffset + 2, member->name);
+                    } else {
+                        // Default case for 16-bit values
+                        fprintf(asmFile, "    mov word ptr [bp-%d-%d], ax  ; Initialize struct member %s\n", 
+                                stackSize, memberOffset, member->name);
+                    }
+                    
+                    // Move to next member and initializer
+                    member = member->next;
+                    initValue = initValue->next;
+                }
+            } else {
+                // Single-value initializer - not directly supported for structs
+                // Just reserve space
+                fprintf(asmFile, "    ; Warning: Single value initializer not supported for struct, leaving uninitialized\n");
+                
+                int structSize = structInfo->size;
+                int wordsToPush = (structSize + 1) / 2; // Round up to nearest word
+                
+                for (int i = 0; i < wordsToPush; i++) {
+                    fprintf(asmFile, "    push 0 ; Uninitialized struct space\n");
+                }
+            }
+        }
+        // For regular values
+        else {
+            // Generate the value
+            generateExpression(node->declaration.initializer);
+            
+            // For long values, need to handle 32-bit initialization
+            if (node->declaration.type_info.type == TYPE_LONG || 
+                node->declaration.type_info.type == TYPE_UNSIGNED_LONG) {
+                // For now, we'll initialize with lower 16 bits in AX and assume upper 16 bits are zero
+                // This would need to be expanded for full 32-bit literal support
+                fprintf(asmFile, "    push 0 ; Push high word (upper 16 bits)\n");
+                fprintf(asmFile, "    push ax ; Push low word (lower 16 bits)\n");
+            } else {
+                // For regular values, just push AX
+                fprintf(asmFile, "    push ax ; Initialize local variable\n");
+            }
+        }
     } else {
-        // Just reserve space by pushing a zero
-        fprintf(asmFile, "    push 0 ; Uninitialized local variable\n");
+        // Reserve space by pushing zeros
+        if (node->declaration.type_info.type == TYPE_STRUCT && 
+            node->declaration.type_info.struct_info) {
+            // For structs, push enough zeros to reserve the required space
+            int structSize = node->declaration.type_info.struct_info->size;
+            int wordsToPush = (structSize + 1) / 2; // Round up to nearest word
+            
+            fprintf(asmFile, "    ; Reserving %d bytes for uninit struct %s\n", 
+                   structSize, node->declaration.var_name);
+            
+            for (int i = 0; i < wordsToPush; i++) {
+                fprintf(asmFile, "    push 0 ; Uninitialized struct space\n");
+            }
+        }
+        else if (node->declaration.type_info.type == TYPE_LONG || 
+                node->declaration.type_info.type == TYPE_UNSIGNED_LONG) {
+            // For 32-bit long, push two 16-bit zeros
+            fprintf(asmFile, "    push 0 ; Uninitialized long variable (high word)\n");
+            fprintf(asmFile, "    push 0 ; Uninitialized long variable (low word)\n");
+        } else {
+            // Just reserve space by pushing a zero
+            fprintf(asmFile, "    push 0 ; Uninitialized local variable\n");
+        }
     }
     
     // Add to local variable table
@@ -812,6 +975,89 @@ void generateExpression(ASTNode* node) {
     if (!node) return;
     
     switch (node->type) {
+        case NODE_STRUCT_DEF:
+            // No code generation needed for struct definitions
+            // Struct definitions only affect the type system
+            break;
+
+        case NODE_MEMBER_ACCESS:
+            {
+                TypeInfo* baseType = getTypeInfoFromExpression(node->left);
+                if (!baseType) {
+                    reportError(-1, "Cannot access member of unknown type");
+                    return;
+                }
+                
+                // Handle struct pointer dereference (->)
+                if (node->member_access.op == OP_ARROW) {
+                    // Ensure we're working with a struct pointer
+                    if (baseType->type != TYPE_STRUCT || !baseType->is_pointer) {
+                        reportError(-1, "Cannot use -> operator on non-struct-pointer");
+                        return;
+                    }
+                    
+                    // Generate code to load the struct pointer into BX
+                    generateExpression(node->left);
+                    fprintf(asmFile, "    mov bx, ax    ; Load struct pointer into BX\n");
+                    
+                    // Calculate the member offset within the struct
+                    int offset = getMemberOffset(baseType->struct_info, node->member_access.member_name);
+                    if (offset < 0) {
+                        reportError(-1, "Struct %s has no member named %s", 
+                                  baseType->struct_info->name, node->member_access.member_name);
+                        return;
+                    }
+                    
+                    // Get the member's type to determine load size
+                    TypeInfo* memberType = getMemberType(baseType->struct_info, node->member_access.member_name);
+                    
+                    // Load the member value from the pointer + offset into AX
+                    if (memberType->type == TYPE_CHAR || memberType->type == TYPE_UNSIGNED_CHAR || memberType->type == TYPE_BOOL) {
+                        // Byte-sized member
+                        fprintf(asmFile, "    mov al, [bx+%d]  ; Load byte-sized struct member\n", offset);
+                        fprintf(asmFile, "    xor ah, ah       ; Clear high byte for byte-sized member\n");
+                    } else {
+                        // Word-sized or larger member (handle larger types separately)
+                        fprintf(asmFile, "    mov ax, [bx+%d]  ; Load struct member\n", offset);
+                    }
+                } 
+                // Handle direct struct access (.)
+                else if (node->member_access.op == OP_DOT) {
+                    // Ensure we're working with a struct
+                    if (baseType->type != TYPE_STRUCT) {
+                        reportError(-1, "Cannot use . operator on non-struct type");
+                        return;
+                    }
+                    
+                    // Generate code to get the struct address into BX
+                    // For locals/parameters, we already have memory access
+                    // For globals, we need to use the symbol address
+                    generateAddressOf(node->left);
+                    fprintf(asmFile, "    mov bx, ax    ; Load struct address into BX\n");
+                    
+                    // Calculate the member offset within the struct
+                    int offset = getMemberOffset(baseType->struct_info, node->member_access.member_name);
+                    if (offset < 0) {
+                        reportError(-1, "Struct %s has no member named %s", 
+                                  baseType->struct_info->name, node->member_access.member_name);
+                        return;
+                    }
+                    
+                    // Get the member's type to determine load size
+                    TypeInfo* memberType = getMemberType(baseType->struct_info, node->member_access.member_name);
+                    
+                    // Load the member value from the address + offset into AX
+                    if (memberType->type == TYPE_CHAR || memberType->type == TYPE_UNSIGNED_CHAR || memberType->type == TYPE_BOOL) {
+                        // Byte-sized member
+                        fprintf(asmFile, "    mov al, [bx+%d]  ; Load byte-sized struct member\n", offset);
+                        fprintf(asmFile, "    xor ah, ah       ; Clear high byte for byte-sized member\n");
+                    } else {
+                        // Word-sized or larger member (handle larger types separately)
+                        fprintf(asmFile, "    mov ax, [bx+%d]  ; Load struct member\n", offset);
+                    }
+                }
+                break;
+            }
         case NODE_LITERAL:
             // Handle different literal types
             if (node->literal.data_type == TYPE_FAR_POINTER) {
@@ -857,18 +1103,36 @@ void generateExpression(ASTNode* node) {
                 // For boolean literals, load 0 or 1 into ax
                 fprintf(asmFile, "    mov ax, %d ; Load boolean value (%s)\n", 
                        node->literal.int_value, node->literal.int_value ? "true" : "false");
+            }            else if (node->literal.data_type == TYPE_LONG || node->literal.data_type == TYPE_UNSIGNED_LONG) {
+                // For 32-bit long literals, load low 16 bits into AX and high 16 bits into DX
+                // Note: This assumes the literal can fit into 32 bits
+                int lowWord = node->literal.int_value & 0xFFFF;
+                int highWord = (node->literal.int_value >> 16) & 0xFFFF;
+                
+                fprintf(asmFile, "    mov ax, %d ; Load long literal (low word)\n", lowWord);
+                fprintf(asmFile, "    mov dx, %d ; Load long literal (high word)\n", highWord);
             } else {
-                // For numbers, load the value into ax
+                // For regular numbers, load the value into ax
                 fprintf(asmFile, "    mov ax, %d ; Load literal\n", node->literal.int_value);
             }
             break;
-        
-        case NODE_IDENTIFIER:
+          case NODE_IDENTIFIER:
             // Check if this is a parameter or local variable
             if (isParameter(node->identifier)) {
-                // Parameters have positive offsets from bp
-                fprintf(asmFile, "    mov ax, [bp+%d] ; Load parameter %s\n", 
-                        -getVariableOffset(node->identifier), node->identifier);
+                // Check if it's a long type
+                TypeInfo* typeInfo = getTypeInfo(node->identifier);
+                if (typeInfo && (typeInfo->type == TYPE_LONG || typeInfo->type == TYPE_UNSIGNED_LONG)) {
+                    // For 32-bit types, load low word into AX and high word into DX
+                    fprintf(asmFile, "    ; Loading long parameter %s\n", node->identifier);
+                    fprintf(asmFile, "    mov ax, [bp+%d] ; Load low word\n", 
+                            -getVariableOffset(node->identifier));
+                    fprintf(asmFile, "    mov dx, [bp+%d] ; Load high word\n", 
+                            -getVariableOffset(node->identifier) + 2);
+                } else {
+                    // Parameters have positive offsets from bp
+                    fprintf(asmFile, "    mov ax, [bp+%d] ; Load parameter %s\n", 
+                            -getVariableOffset(node->identifier), node->identifier);
+                }
             } else {
             // Local variables have negative offsets from bp
                 int varOffset = getVariableOffset(node->identifier);
@@ -895,11 +1159,19 @@ void generateExpression(ASTNode* node) {
                     } else {
                         fprintf(asmFile, "    ; Loading potentially global variable %s\n", node->identifier);
                         fprintf(asmFile, "    mov ax, [_%s] ; Load global variable (fallback)\n", node->identifier);
+                    }                } else {
+                    // Check if it's a long type
+                    TypeInfo* typeInfo = getTypeInfo(node->identifier);
+                    if (typeInfo && (typeInfo->type == TYPE_LONG || typeInfo->type == TYPE_UNSIGNED_LONG)) {
+                        // For 32-bit types, load low word into AX and high word into DX
+                        fprintf(asmFile, "    ; Loading long variable %s\n", node->identifier);
+                        fprintf(asmFile, "    mov ax, [bp-%d] ; Load low word\n", varOffset);
+                        fprintf(asmFile, "    mov dx, [bp-%d] ; Load high word\n", varOffset - 2);
+                    } else {
+                        // Ensure we use word-aligned offsets for local variables
+                        fprintf(asmFile, "    mov ax, [bp-%d] ; Load local variable %s\n", 
+                                varOffset, node->identifier);
                     }
-                } else {
-                    // Ensure we use word-aligned offsets for local variables
-                    fprintf(asmFile, "    mov ax, [bp-%d] ; Load local variable %s\n", 
-                            varOffset, node->identifier);
                 }
             }
             break;
@@ -967,23 +1239,54 @@ void generateBinaryOp(ASTNode* node) {
         fprintf(asmFile, "%s:\n", endLabel);
         free(trueLabel);
         free(endLabel);
-        return;
-    }
-    // Generate left operand and save
-    generateExpression(node->left);
-    fprintf(asmFile, "    push ax ; Save left operand\n");
+        return;    }
     
-    // Generate right operand, result in ax
-    generateExpression(node->right);
-    
-    // Move right operand to bx and restore left operand to ax
-    fprintf(asmFile, "    mov bx, ax ; Right operand to bx\n");
-    fprintf(asmFile, "    pop ax ; Restore left operand\n");
-      // Perform operation based on operator type
+    // Check if we're operating on long types
+    TypeInfo* leftType = getTypeInfoFromExpression(node->left);
+    TypeInfo* rightType = getTypeInfoFromExpression(node->right);
+    int isLongOperation = (leftType && (leftType->type == TYPE_LONG || leftType->type == TYPE_UNSIGNED_LONG)) ||
+                        (rightType && (rightType->type == TYPE_LONG || rightType->type == TYPE_UNSIGNED_LONG));
+                        
+    if (isLongOperation) {
+        // For 32-bit operations, we need to handle the upper 16 bits (DX register)
+        fprintf(asmFile, "    ; 32-bit long operation detected\n");
+        
+        // Generate left operand (result in DX:AX)
+        generateExpression(node->left);
+        fprintf(asmFile, "    push dx ; Save left operand high word\n");
+        fprintf(asmFile, "    push ax ; Save left operand low word\n");
+        
+        // Generate right operand (result in DX:AX)
+        generateExpression(node->right);
+        fprintf(asmFile, "    mov cx, dx ; Right operand high word to CX\n");
+        fprintf(asmFile, "    mov bx, ax ; Right operand low word to BX\n");
+        
+        // Restore left operand to DX:AX
+        fprintf(asmFile, "    pop ax ; Restore left operand low word\n");
+        fprintf(asmFile, "    pop dx ; Restore left operand high word\n");
+    } else {
+        // Regular 16-bit operation
+        // Generate left operand and save
+        generateExpression(node->left);
+        fprintf(asmFile, "    push ax ; Save left operand\n");
+        
+        // Generate right operand, result in ax
+        generateExpression(node->right);
+        
+        // Move right operand to bx and restore left operand to ax
+        fprintf(asmFile, "    mov bx, ax ; Right operand to bx\n");
+        fprintf(asmFile, "    pop ax ; Restore left operand\n");
+    }    // Perform operation based on operator type
     switch (node->operation.op) {
         case OP_ADD:
+            // Check if this is a long operation
+            if (isLongOperation) {
+                fprintf(asmFile, "    ; 32-bit addition\n");
+                fprintf(asmFile, "    add ax, bx ; Add low words\n");
+                fprintf(asmFile, "    adc dx, cx ; Add high words with carry\n");
+            }
             // Check for pointer arithmetic (pointer + integer)
-            if (isPointerType(node->left)) {
+            else if (isPointerType(node->left)) {
                 // Get element size for scaling
                 TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
                 if (typeInfo) {
@@ -997,6 +1300,7 @@ void generateBinaryOp(ASTNode* node) {
                         fprintf(asmFile, "    shl bx, 1 ; Scale index by 2 for word elements\n");
                     }
                 }
+                fprintf(asmFile, "    add ax, bx ; Addition\n");
             } else if (isPointerType(node->right)) {
                 // Case of integer + pointer (need to scale integer)
                 TypeInfo* typeInfo = getTypeInfoFromExpression(node->right);
@@ -1014,13 +1318,20 @@ void generateBinaryOp(ASTNode* node) {
                     // Swap operands to ensure pointer is in AX
                     fprintf(asmFile, "    xchg ax, bx ; Swap to put pointer in AX\n");
                 }
+                fprintf(asmFile, "    add ax, bx ; Addition\n");
+            } else {
+                fprintf(asmFile, "    add ax, bx ; Addition\n");
             }
-            fprintf(asmFile, "    add ax, bx ; Addition\n");
             break;
-            
-        case OP_SUB:
+              case OP_SUB:
+            // Check if this is a long operation
+            if (isLongOperation) {
+                fprintf(asmFile, "    ; 32-bit subtraction\n");
+                fprintf(asmFile, "    sub ax, bx ; Subtract low words\n");
+                fprintf(asmFile, "    sbb dx, cx ; Subtract high words with borrow\n");
+            }
             // Check for pointer arithmetic (pointer - integer or pointer - pointer)
-            if (isPointerType(node->left)) {
+            else if (isPointerType(node->left)) {
                 if (isPointerType(node->right)) {
                     // Pointer - Pointer: yields a count of elements between pointers
                     fprintf(asmFile, "    ; Pointer difference\n");
@@ -1048,36 +1359,183 @@ void generateBinaryOp(ASTNode* node) {
                 fprintf(asmFile, "    sub ax, bx ; Subtraction\n");
             }
             break;
-            
-        case OP_MUL:
-            fprintf(asmFile, "    imul bx ; Multiplication (signed)\n");
+              case OP_MUL:
+            if (isLongOperation) {
+                // 32-bit multiplication is complex - needs multiple steps
+                fprintf(asmFile, "    ; 32-bit multiplication\n");
+                
+                // First save our operands 
+                fprintf(asmFile, "    push dx ; Save left high word\n");
+                fprintf(asmFile, "    push ax ; Save left low word\n");
+                fprintf(asmFile, "    push cx ; Save right high word\n");
+                fprintf(asmFile, "    push bx ; Save right low word\n");
+                
+                // First multiplication: left-low * right-low (result in DX:AX)
+                fprintf(asmFile, "    mov ax, [esp+2] ; Load left low word\n");
+                fprintf(asmFile, "    mov bx, [esp] ; Load right low word\n");
+                fprintf(asmFile, "    mul bx ; Unsigned multiply, result in DX:AX\n");
+                fprintf(asmFile, "    push dx ; Save high result of low*low\n");
+                fprintf(asmFile, "    push ax ; Save low result\n");
+                
+                // Second mult: left-high * right-low (result added to high word)
+                fprintf(asmFile, "    mov ax, [esp+8] ; Load left high word\n");
+                fprintf(asmFile, "    mov bx, [esp+4] ; Load right low word\n");
+                fprintf(asmFile, "    mul bx ; Multiply, result in DX:AX\n");
+                fprintf(asmFile, "    add [esp+2], ax ; Add to high word of result\n");
+                
+                // Third mult: left-low * right-high (result added to high word)
+                fprintf(asmFile, "    mov ax, [esp+6] ; Load left low word\n");
+                fprintf(asmFile, "    mov bx, [esp+4] ; Load right high word\n");
+                fprintf(asmFile, "    mul bx ; Multiply, result in DX:AX\n");
+                fprintf(asmFile, "    add [esp+2], ax ; Add to high word of result\n");
+                
+                // Get final result - ignoring overflows from high word * high word
+                fprintf(asmFile, "    pop ax ; Get low word of result\n");
+                fprintf(asmFile, "    pop dx ; Get high word of result\n");
+                
+                // Clean up the stack
+                fprintf(asmFile, "    add esp, 4 ; Clean up saved values\n");
+            } else {
+                fprintf(asmFile, "    imul bx ; Multiplication (signed)\n");
+            }
             break;        case OP_DIV:
             {
-                TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
-                if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
-                                 typeInfo->type == TYPE_UNSIGNED_SHORT || 
-                                 typeInfo->type == TYPE_UNSIGNED_CHAR)) {
-                    fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned division\n");
-                    fprintf(asmFile, "    div bx ; Division (unsigned)\n");
+                if (isLongOperation) {
+                    // 32-bit division is complex
+                    fprintf(asmFile, "    ; 32-bit division\n");
+                    
+                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
+                    if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_LONG)) {
+                        // We already have dividend in DX:AX and divisor in CX:BX
+                        // Use a custom division routine for 32-bit / 32-bit
+                        
+                        // For now, we'll only support division by 16-bit divisors
+                        // which is the common case when dividing by constants
+                        fprintf(asmFile, "    ; 32-bit unsigned division by 16-bit divisor\n");
+                        fprintf(asmFile, "    push cx ; Save divisor high word\n");
+                        
+                        // Check if high word of divisor is zero
+                        fprintf(asmFile, "    test cx, cx ; Check if high word of divisor is zero\n");
+                        fprintf(asmFile, "    jnz div32_complex ; Jump if we need a complex division\n");
+                        
+                        // Simple case: 32-bit / 16-bit = 16-bit
+                        fprintf(asmFile, "    div bx ; Divide DX:AX by BX\n");
+                        fprintf(asmFile, "    xor dx, dx ; Clear high word of result\n");
+                        fprintf(asmFile, "    jmp div32_done\n");
+                        
+                        // Complex case handler stub - would need a full algorithm
+                        fprintf(asmFile, "div32_complex:\n");
+                        fprintf(asmFile, "    ; Complex 32-bit division not fully implemented\n");
+                        fprintf(asmFile, "    ; Returning dividend as result\n");
+                        
+                        fprintf(asmFile, "div32_done:\n");
+                        fprintf(asmFile, "    add sp, 2 ; Clean up stack\n");
+                    } else {
+                        // Signed division - similar approach but using IDIV
+                        fprintf(asmFile, "    ; 32-bit signed division\n");
+                        fprintf(asmFile, "    push cx ; Save divisor high word\n");
+                        
+                        // Check if high word of divisor is zero
+                        fprintf(asmFile, "    test cx, cx ; Check if high word of divisor is zero\n");
+                        fprintf(asmFile, "    jnz idiv32_complex ; Jump if we need a complex division\n");
+                        
+                        // Simple case: 32-bit / 16-bit = 16-bit
+                        fprintf(asmFile, "    idiv bx ; Divide DX:AX by BX\n");
+                        fprintf(asmFile, "    cwd ; Sign extend result\n");
+                        fprintf(asmFile, "    jmp idiv32_done\n");
+                        
+                        // Complex case handler stub - would need a full algorithm
+                        fprintf(asmFile, "idiv32_complex:\n");
+                        fprintf(asmFile, "    ; Complex 32-bit division not fully implemented\n");
+                        fprintf(asmFile, "    ; Returning dividend as result\n");
+                        
+                        fprintf(asmFile, "idiv32_done:\n");
+                        fprintf(asmFile, "    add sp, 2 ; Clean up stack\n");
+                    }
                 } else {
-                    fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for division\n");
-                    fprintf(asmFile, "    idiv bx ; Division (signed)\n");
+                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
+                    if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
+                                    typeInfo->type == TYPE_UNSIGNED_SHORT || 
+                                    typeInfo->type == TYPE_UNSIGNED_CHAR)) {
+                        fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned division\n");
+                        fprintf(asmFile, "    div bx ; Division (unsigned)\n");
+                    } else {
+                        fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for division\n");
+                        fprintf(asmFile, "    idiv bx ; Division (signed)\n");
+                    }
                 }
             }
-            break;
-        case OP_MOD:
+            break;        case OP_MOD:
             {
-                TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
-                if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
-                                 typeInfo->type == TYPE_UNSIGNED_SHORT || 
-                                 typeInfo->type == TYPE_UNSIGNED_CHAR)) {
-                    fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned mod\n");
-                    fprintf(asmFile, "    div bx ; Division (unsigned)\n");
-                    fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
+                if (isLongOperation) {
+                    // 32-bit modulus is complex
+                    fprintf(asmFile, "    ; 32-bit modulus\n");
+                    
+                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
+                    if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_LONG)) {
+                        // Similar to division, but we want remainder instead
+                        // We already have dividend in DX:AX and divisor in CX:BX
+                        
+                        fprintf(asmFile, "    ; 32-bit unsigned modulus\n");
+                        fprintf(asmFile, "    push cx ; Save divisor high word\n");
+                        
+                        // Check if high word of divisor is zero
+                        fprintf(asmFile, "    test cx, cx ; Check if high word of divisor is zero\n");
+                        fprintf(asmFile, "    jnz mod32_complex ; Jump if we need a complex modulus\n");
+                        
+                        // Simple case: 32-bit % 16-bit
+                        fprintf(asmFile, "    div bx ; Divide DX:AX by BX\n");
+                        fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
+                        fprintf(asmFile, "    xor dx, dx ; Clear high word of result\n");
+                        fprintf(asmFile, "    jmp mod32_done\n");
+                        
+                        // Complex case handler stub
+                        fprintf(asmFile, "mod32_complex:\n");
+                        fprintf(asmFile, "    ; Complex 32-bit modulus not fully implemented\n");
+                        fprintf(asmFile, "    ; Returning 0 as result\n");
+                        fprintf(asmFile, "    xor ax, ax\n");
+                        fprintf(asmFile, "    xor dx, dx\n");
+                        
+                        fprintf(asmFile, "mod32_done:\n");
+                        fprintf(asmFile, "    add sp, 2 ; Clean up stack\n");
+                    } else {
+                        // Signed modulus 
+                        fprintf(asmFile, "    ; 32-bit signed modulus\n");
+                        fprintf(asmFile, "    push cx ; Save divisor high word\n");
+                        
+                        // Check if high word of divisor is zero
+                        fprintf(asmFile, "    test cx, cx ; Check if high word of divisor is zero\n");
+                        fprintf(asmFile, "    jnz imod32_complex ; Jump if we need a complex modulus\n");
+                        
+                        // Simple case: 32-bit % 16-bit
+                        fprintf(asmFile, "    idiv bx ; Divide DX:AX by BX\n");
+                        fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
+                        fprintf(asmFile, "    cwd ; Sign extend result\n");
+                        fprintf(asmFile, "    jmp imod32_done\n");
+                        
+                        // Complex case handler stub
+                        fprintf(asmFile, "imod32_complex:\n");
+                        fprintf(asmFile, "    ; Complex 32-bit modulus not fully implemented\n");
+                        fprintf(asmFile, "    ; Returning 0 as result\n");
+                        fprintf(asmFile, "    xor ax, ax\n");
+                        fprintf(asmFile, "    xor dx, dx\n");
+                        
+                        fprintf(asmFile, "imod32_done:\n");
+                        fprintf(asmFile, "    add sp, 2 ; Clean up stack\n");
+                    }
                 } else {
-                    fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for signed mod\n");
-                    fprintf(asmFile, "    idiv bx ; Division (signed)\n");
-                    fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
+                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
+                    if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
+                                    typeInfo->type == TYPE_UNSIGNED_SHORT || 
+                                    typeInfo->type == TYPE_UNSIGNED_CHAR)) {
+                        fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned mod\n");
+                        fprintf(asmFile, "    div bx ; Division (unsigned)\n");
+                        fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
+                    } else {
+                        fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for signed mod\n");
+                        fprintf(asmFile, "    idiv bx ; Division (signed)\n");
+                        fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
+                    }
                 }
             }
             break;
@@ -1225,20 +1683,41 @@ void generateFunctionCall(ASTNode* node) {
         args[argCount++] = arg;
         arg = arg->next;
     }
-    
-    // Push arguments in reverse order (right-to-left) as per C calling convention
+      // Push arguments in reverse order (right-to-left) as per C calling convention
     for (int i = argCount - 1; i >= 0; i--) {
-        // Generate code for each argument (result in AX)
+        // Get argument type information to check if it's a long type
+        TypeInfo* typeInfo = getTypeInfoFromExpression(args[i]);
+        
+        // Generate code for each argument
         generateExpression(args[i]);
-        fprintf(asmFile, "    push ax ; Argument %d\n", i + 1);
+        
+        if (typeInfo && (typeInfo->type == TYPE_LONG || typeInfo->type == TYPE_UNSIGNED_LONG)) {
+            // For 32-bit long values, push high word (DX) then low word (AX)
+            fprintf(asmFile, "    push dx ; Argument %d (high word)\n", i + 1);
+            fprintf(asmFile, "    push ax ; Argument %d (low word)\n", i + 1);
+        } else {
+            // For normal values, just push AX
+            fprintf(asmFile, "    push ax ; Argument %d\n", i + 1);
+        }
     }
     
     // Call the function
     fprintf(asmFile, "    call _%s\n", node->call.func_name);
-    
-    // Clean up stack (caller-cleanup convention)
+      // Clean up stack (caller-cleanup convention)
     if (argCount > 0) {
-        fprintf(asmFile, "    add sp, %d ; Remove arguments\n", argCount * 2);
+        // Calculate how many bytes to clean up based on argument types
+        int bytesToCleanup = 0;
+        
+        for (int i = 0; i < argCount; i++) {
+            TypeInfo* typeInfo = getTypeInfoFromExpression(args[i]);
+            if (typeInfo && (typeInfo->type == TYPE_LONG || typeInfo->type == TYPE_UNSIGNED_LONG)) {
+                bytesToCleanup += 4; // 32-bit args take 4 bytes
+            } else {
+                bytesToCleanup += 2; // Normal args take 2 bytes
+            }
+        }
+        
+        fprintf(asmFile, "    add sp, %d ; Remove arguments\n", bytesToCleanup);
     }
 }
 
@@ -1246,11 +1725,20 @@ void generateFunctionCall(ASTNode* node) {
 void generateReturnStatement(ASTNode* node) {
     if (!node || node->type != NODE_RETURN) return;
     
-    fprintf(asmFile, "    ; Return statement\n");
-      // Generate code for return value if present
+    fprintf(asmFile, "    ; Return statement\n");    // Generate code for return value if present
     if (node->return_stmt.expr) {
+        // Check if the return value is a long type
+        TypeInfo* returnType = getTypeInfoFromExpression(node->return_stmt.expr);
+        
         generateExpression(node->return_stmt.expr);
-        // Return value is now in AX
+        
+        if (returnType && (returnType->type == TYPE_LONG || returnType->type == TYPE_UNSIGNED_LONG)) {
+            // For 32-bit return values, the value is in DX:AX
+            fprintf(asmFile, "    ; Returning 32-bit long value in DX:AX\n");
+        } else {
+            // For regular types, return value is in AX
+            fprintf(asmFile, "    ; Return value in AX\n");
+        }
     }
     
     // For naked functions, don't generate automatic control flow
@@ -1298,9 +1786,9 @@ void generateAsmStmt(ASTNode* node) {
         if (isOutput) free(isOutput);
         return;
     }
-    
-    // Commonly used registers based on constraint type
-    const char* reg_choices[] = {"ax", "bx", "cx", "dx", "si", "di"};
+      // Commonly used registers based on constraint type
+    const char* word_reg_choices[] = {"ax", "bx", "cx", "dx", "si", "di"};
+    const char* byte_reg_choices[] = {"al", "bl", "cl", "dl"}; // Byte-sized registers
     int reg_index = 0;
     
     // Process operands and assign registers
@@ -1321,21 +1809,60 @@ void generateAsmStmt(ASTNode* node) {
             // Generate code to evaluate the operand
             generateExpression(node->asm_stmt.operands[i]);
         }
-        
-        // Assign register based on constraint
-        if (*constraint == 'r') {
-            // Register constraint: assign a register
-            if (reg_index < 6) {
-                registers[i] = strdup(reg_choices[reg_index++]);
+          // Assign register based on constraint
+        if (*constraint == 'r' && (constraint[1] == 'b' || constraint[1] == '\0')) {
+            // Check if it's a byte register constraint ("rb") or word register ("r")
+            int is_byte_register = (constraint[1] == 'b');
+            
+            if (is_byte_register) {
+                // Byte register constraint ("rb")
+                if (reg_index < 4) { // Only 4 byte registers available
+                    registers[i] = strdup(byte_reg_choices[reg_index++]);
+                } else {
+                    // Fall back to al if we run out of preferred registers
+                    registers[i] = strdup("al");
+                }
+                
+                // For input operands, move result to the assigned byte register
+                if (!isOutput[i]) {
+                    // AL is the default result register's low byte
+                    if (strcmp(registers[i], "al") != 0) {
+                        fprintf(asmFile, "    mov %s, al ; Load byte input operand %d into register\n", 
+                                registers[i], i);
+                    }
+                }
             } else {
-                // Run out of preferred registers, just use ax
-                registers[i] = strdup("ax");
+                // Standard word register constraint ("r")
+                if (reg_index < 6) {
+                    registers[i] = strdup(word_reg_choices[reg_index++]);
+                } else {
+                    // Run out of preferred registers, just use ax
+                    registers[i] = strdup("ax");
+                }
+                
+                // For input operands, move result to the assigned register
+                if (!isOutput[i] && strcmp(registers[i], "ax") != 0) {
+                    fprintf(asmFile, "    mov %s, ax ; Load word input operand %d into register\n", 
+                            registers[i], i);
+                }
+            }
+        } else if (*constraint == 'q') {
+            // 'q' is a GCC constraint that means a,b,c,d registers (in any size)
+            // In our case, we'll use it specifically for byte registers (al, bl, cl, dl)
+            if (reg_index < 4) { // Only 4 byte registers available
+                registers[i] = strdup(byte_reg_choices[reg_index++]);
+            } else {
+                // Fall back to al if we run out of preferred registers
+                registers[i] = strdup("al");
             }
             
-            // For input operands, move result to the assigned register
-            if (!isOutput[i] && strcmp(registers[i], "ax") != 0) {
-                fprintf(asmFile, "    mov %s, ax ; Load input operand %d into register\n", 
-                        registers[i], i);
+            // For input operands, move result to the assigned byte register
+            if (!isOutput[i]) {
+                // AL is the default result register's low byte
+                if (strcmp(registers[i], "al") != 0) {
+                    fprintf(asmFile, "    mov %s, al ; Load byte input operand %d into register ('q' constraint)\n", 
+                            registers[i], i);
+                }
             }
         } else {
             // Default to ax for unknown constraints

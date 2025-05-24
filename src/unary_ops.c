@@ -191,6 +191,44 @@ ASTNode* parsePostfixExpression() {
             
             left = derefNode;
         }
+        // Handle struct member access (x.y)
+        else if (tokenIs(TOKEN_DOT)) {
+            consume(TOKEN_DOT);
+            
+            if (!tokenIs(TOKEN_IDENTIFIER)) {
+                Token token = getCurrentToken();
+                reportError(token.pos, "Expected identifier after '.'");
+                exit(1);
+            }
+            
+            char* memberName = getCurrentToken().value;
+            consume(TOKEN_IDENTIFIER);
+            
+            ASTNode* node = createNode(NODE_MEMBER_ACCESS);
+            node->member_access.op = OP_DOT;
+            node->member_access.member_name = strdup(memberName);
+            node->left = left;
+            left = node;
+        }
+        // Handle struct member access through pointer (x->y)
+        else if (tokenIs(TOKEN_ARROW)) {
+            consume(TOKEN_ARROW);
+            
+            if (!tokenIs(TOKEN_IDENTIFIER)) {
+                Token token = getCurrentToken();
+                reportError(token.pos, "Expected identifier after '->'");
+                exit(1);
+            }
+            
+            char* memberName = getCurrentToken().value;
+            consume(TOKEN_IDENTIFIER);
+            
+            ASTNode* node = createNode(NODE_MEMBER_ACCESS);
+            node->member_access.op = OP_ARROW;
+            node->member_access.member_name = strdup(memberName);
+            node->left = left;
+            left = node;
+        }
         // Handle postfix increment (x++)
         else if (tokenIs(TOKEN_INCREMENT)) {
             consume(TOKEN_INCREMENT);

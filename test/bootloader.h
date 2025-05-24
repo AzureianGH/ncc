@@ -11,3 +11,6 @@
 
 #define uint8_t unsigned char
 #define uint16_t unsigned int
+
+#define NULL 0
+#define NULL_PTR (void*)0

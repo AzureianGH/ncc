@@ -5,6 +5,8 @@
 #include "token_debug.h"
 #include "attributes.h"
 #include "type_checker.h"
+#include "struct_support.h"
+#include "struct_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -35,17 +37,27 @@ void expect(TokenType type) {
 int isTypeName(Token token) {
     return token.type == TOKEN_INT || 
            token.type == TOKEN_SHORT || 
+           token.type == TOKEN_LONG || 
            token.type == TOKEN_CHAR || 
            token.type == TOKEN_VOID || 
            token.type == TOKEN_UNSIGNED ||
            token.type == TOKEN_FAR ||
-           token.type == TOKEN_BOOL;
+           token.type == TOKEN_BOOL ||
+           token.type == TOKEN_STRUCT;
 }
+
+// Forward declaration for struct type parsing
+TypeInfo parseStructType();
 
 // Parse a type (int, short, char, etc.)
 TypeInfo parseType() {
     TypeInfo typeInfo;
     memset(&typeInfo, 0, sizeof(TypeInfo));
+    
+    // Check if it's a struct type
+    if (tokenIs(TOKEN_STRUCT)) {
+        return parseStructType();
+    }
     
     // Handle unsigned if present
     int isUnsigned = 0;
@@ -67,14 +79,16 @@ TypeInfo parseType() {
             }
             typeInfo.is_far = 1;
         }    }
-    
-    // Parse base type
+      // Parse base type
     if (tokenIs(TOKEN_INT)) {
         consume(TOKEN_INT);
         typeInfo.type = isUnsigned ? TYPE_UNSIGNED_INT : TYPE_INT;
     } else if (tokenIs(TOKEN_SHORT)) {
         consume(TOKEN_SHORT);
         typeInfo.type = isUnsigned ? TYPE_UNSIGNED_SHORT : TYPE_SHORT;
+    } else if (tokenIs(TOKEN_LONG)) {
+        consume(TOKEN_LONG);
+        typeInfo.type = isUnsigned ? TYPE_UNSIGNED_LONG : TYPE_LONG;
     } else if (tokenIs(TOKEN_CHAR)) {
         consume(TOKEN_CHAR);
         typeInfo.type = isUnsigned ? TYPE_UNSIGNED_CHAR : TYPE_CHAR;
@@ -135,6 +149,9 @@ ASTNode* parseProgram() {
     return root;
 }
 
+// Forward declaration
+ASTNode* parseStructDefinition();
+
 // Parse a declaration (variable or function)
 ASTNode* parseDeclaration() {
     // Check for function attributes before the type
@@ -152,6 +169,11 @@ ASTNode* parseDeclaration() {
     if (tokenIs(TOKEN_ATTRIBUTE) || tokenIs(TOKEN_ATTR_OPEN)) {
         parseFunctionAttributes(&tempFuncInfo);
         hasAttributes = 1;
+    }
+    
+    // Check for struct definition
+    if (tokenIs(TOKEN_STRUCT)) {
+        return parseStructDefinition();
     }
     
     // Parse the type
@@ -308,13 +330,46 @@ ASTNode* parseVariableDeclaration(char* name, TypeInfo typeInfo) {
         
         expect(TOKEN_RBRACKET);
     }
-    
-    // Check for initializer
+      // Check for initializer
     if (tokenIs(TOKEN_ASSIGN)) {
         consume(TOKEN_ASSIGN);
         
+        // Check for struct initializer: struct Point p = {10, 20};
+        if (node->declaration.type_info.type == TYPE_STRUCT && tokenIs(TOKEN_LBRACE)) {
+            consume(TOKEN_LBRACE);
+            
+            // Create a linked list of initializer expressions for struct members
+            ASTNode* initializers = NULL;
+            ASTNode* lastInitializer = NULL;
+            int initCount = 0;
+            
+            // Parse comma-separated expressions until closing brace
+            if (!tokenIs(TOKEN_RBRACE)) {
+                // First initializer
+                initializers = parseExpression();
+                lastInitializer = initializers;
+                initCount = 1;
+                
+                // Additional initializers
+                while (tokenIs(TOKEN_COMMA)) {
+                    consume(TOKEN_COMMA);
+                    if (tokenIs(TOKEN_RBRACE)) {
+                        break; // Allow trailing comma
+                    }
+                    ASTNode* expr = parseExpression();
+                    lastInitializer->next = expr;
+                    lastInitializer = expr;
+                    initCount++;
+                }
+            }
+            
+            expect(TOKEN_RBRACE);
+            
+            // Store the initializers and count
+            node->declaration.initializer = initializers;
+        }
         // Check for array initializer with braces: int arr[5] = {1, 2, 3, 4, 5};
-        if (node->declaration.type_info.is_array && tokenIs(TOKEN_LBRACE)) {
+        else if (node->declaration.type_info.is_array && tokenIs(TOKEN_LBRACE)) {
             consume(TOKEN_LBRACE);
             
             // Create a linked list of initializer expressions

@@ -9,11 +9,14 @@ typedef enum {
     TYPE_SHORT,         // 16-bit signed integer (alias)
     TYPE_UNSIGNED_INT,  // 16-bit unsigned integer
     TYPE_UNSIGNED_SHORT,// 16-bit unsigned integer (alias)
+    TYPE_LONG,          // 32-bit signed integer
+    TYPE_UNSIGNED_LONG, // 32-bit unsigned integer
     TYPE_CHAR,          // 8-bit signed integer
     TYPE_UNSIGNED_CHAR, // 8-bit unsigned integer
     TYPE_VOID,          // void type
     TYPE_FAR_POINTER,   // Far pointer (segment:offset)
-    TYPE_BOOL           // C23 bool type (1 byte)
+    TYPE_BOOL,          // C23 bool type (1 byte)
+    TYPE_STRUCT         // struct type
 } DataType;
 
 // AST node types
@@ -35,7 +38,9 @@ typedef enum {    NODE_PROGRAM,      // Program root
     NODE_ASM_BLOCK,    // Inline assembly block
     NODE_ASM,          // Inline assembly
     NODE_EXPRESSION,   // Expression statement
-    NODE_TERNARY       // Ternary conditional expression (? :)
+    NODE_TERNARY,      // Ternary conditional expression (? :)
+    NODE_STRUCT_DEF,   // Struct definition
+    NODE_MEMBER_ACCESS // Struct member access
 } NodeType;
 
 // Binary operators
@@ -63,6 +68,8 @@ typedef enum {
     OP_MUL_ASSIGN,  // *=
     OP_DIV_ASSIGN,  // /=
     OP_MOD_ASSIGN,  // %=
+    OP_DOT,         // . (struct member access)
+    OP_ARROW,       // -> (struct member access through pointer)
     OP_COMMA        // , (comma operator)
 } OperatorType;
 
@@ -84,8 +91,11 @@ typedef enum {
 // Forward declaration
 struct ASTNode;
 
+// Struct info forward declaration
+typedef struct StructInfo StructInfo;
+
 // Type information structure
-typedef struct {
+typedef struct TypeInfo {
     DataType type;
     int is_pointer;
     int is_far_pointer;
@@ -94,7 +104,23 @@ typedef struct {
     int is_stackframe;  // Function uses stackframe with register preservation
     int is_far;         // Function is far called
     int is_static;      // Has static storage duration
+    StructInfo* struct_info; // Pointer to struct info when type is TYPE_STRUCT
 } TypeInfo;
+
+// Struct member declaration
+typedef struct StructMember {
+    char* name;                     // Member name
+    TypeInfo type_info;             // Member type
+    int offset;                     // Byte offset within struct
+    struct StructMember* next;      // Next member in linked list
+} StructMember;
+
+// Struct definition information
+struct StructInfo {
+    char* name;                     // Name of the struct
+    StructMember* members;          // List of struct members
+    int size;                       // Total size of the struct in bytes
+};
 
 // Function information structure
 typedef struct {
@@ -207,13 +233,25 @@ typedef struct ASTNode {
         struct {
             OperatorType op;  // The operation to perform (OP_PLUS_ASSIGN, etc.)
         } assignment;
-        
-        // For ternary conditional expressions (condition ? expr_if_true : expr_if_false)
+          // For ternary conditional expressions (condition ? expr_if_true : expr_if_false)
         struct {
             struct ASTNode* condition;  // Condition expression
             struct ASTNode* true_expr;  // Expression if condition is true
             struct ASTNode* false_expr; // Expression if condition is false
         } ternary;
+        
+        // For struct definition (struct name { members })
+        struct {
+            char* struct_name;          // Name of the struct type
+            StructInfo* info;           // Struct information
+            struct ASTNode* members;    // List of member declarations
+        } struct_def;
+        
+        // For struct member access (expr.member or expr->member)
+        struct {
+            OperatorType op;            // OP_DOT or OP_ARROW
+            char* member_name;          // Name of the accessed member
+        } member_access;
     };
 }ASTNode;
 

@@ -51,8 +51,10 @@ const char* getDataTypeName(DataType type) {
     switch (type) {
         case TYPE_INT: return "int";
         case TYPE_SHORT: return "short";
+        case TYPE_LONG: return "long";
         case TYPE_UNSIGNED_INT: return "unsigned int";
         case TYPE_UNSIGNED_SHORT: return "unsigned short";
+        case TYPE_UNSIGNED_LONG: return "unsigned long";
         case TYPE_CHAR: return "char";
         case TYPE_UNSIGNED_CHAR: return "unsigned char";
         case TYPE_VOID: return "void";
@@ -70,6 +72,9 @@ int getTypeSize(DataType type) {
         case TYPE_UNSIGNED_INT:
         case TYPE_UNSIGNED_SHORT:
             return 2;  // 16-bit
+        case TYPE_LONG:
+        case TYPE_UNSIGNED_LONG:
+            return 4;  // 32-bit
         case TYPE_CHAR:
         case TYPE_UNSIGNED_CHAR:
         case TYPE_BOOL:

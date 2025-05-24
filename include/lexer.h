@@ -10,6 +10,7 @@ typedef enum {
     // Keywords    
     TOKEN_INT,
     TOKEN_SHORT,
+    TOKEN_LONG,
     TOKEN_UNSIGNED,
     TOKEN_CHAR,
     TOKEN_VOID,    TOKEN_FAR,
@@ -30,6 +31,7 @@ typedef enum {
     TOKEN_BOOL,          // bool (C23)
     TOKEN_TRUE,          // true (C23)
     TOKEN_FALSE,         // false (C23)    
+    TOKEN_STRUCT,        // struct
     
     TOKEN_SIZEOF,        // sizeof    
     TOKEN_ATTR_OPEN,     // [[

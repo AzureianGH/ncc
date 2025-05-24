@@ -78,6 +78,7 @@ static void skipWhitespace() {
 static int isKeyword(const char* str) {
     if (strcmp(str, "int") == 0) return TOKEN_INT;
     if (strcmp(str, "short") == 0) return TOKEN_SHORT;
+    if (strcmp(str, "long") == 0) return TOKEN_LONG;
     if (strcmp(str, "unsigned") == 0) return TOKEN_UNSIGNED;
     if (strcmp(str, "char") == 0) return TOKEN_CHAR;
     if (strcmp(str, "void") == 0) return TOKEN_VOID;
@@ -88,7 +89,8 @@ static int isKeyword(const char* str) {
     if (strcmp(str, "__attribute__") == 0) return TOKEN_ATTRIBUTE;
     if (strcmp(str, "naked") == 0) return TOKEN_NAKED;
     if (strcmp(str, "static") == 0) return TOKEN_STATIC;
-    if (strcmp(str, "deprecated") == 0) return TOKEN_DEPRECATED;    
+    if (strcmp(str, "deprecated") == 0) return TOKEN_DEPRECATED;
+    if (strcmp(str, "struct") == 0) return TOKEN_STRUCT;
     if (strcmp(str, "if") == 0) return TOKEN_IF;
     if (strcmp(str, "else") == 0) return TOKEN_ELSE;    
     if (strcmp(str, "while") == 0) return TOKEN_WHILE;

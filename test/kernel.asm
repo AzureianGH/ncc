@@ -9,35 +9,39 @@ __after_diskload:
 
     ; Function call to clearScreen
     call _clearScreen
-    ; Function call to writeString
-    ; String literal: NCC Bootloader\r\n
+    ; Function call to initUart
+    call _initUart
+    ; Function call to writeLog
+    mov ax, 0 ; Load literal
+    push ax ; Argument 2
+    ; String literal: UART initialized.\r\n
     mov ax, kernel_string_0 ; Address of string
     push ax ; Argument 1
-    call _writeString
-    add sp, 2 ; Remove arguments
-    ; Function call to writeString
-    ; String literal: Loading kernel...\r\n
+    call _writeLog
+    add sp, 4 ; Remove arguments
+    ; Function call to writeLog
+    mov ax, 2 ; Load literal
+    push ax ; Argument 2
+    ; String literal: NCC Bootloader\r\n
     mov ax, kernel_string_1 ; Address of string
     push ax ; Argument 1
-    call _writeString
-    add sp, 2 ; Remove arguments
-    ; Function call to writeString
-    ; String literal: Integer to string: 
+    call _writeLog
+    add sp, 4 ; Remove arguments
+    ; Function call to writeLog
+    mov ax, 2 ; Load literal
+    push ax ; Argument 2
+    ; String literal: Enabling VGA...\r\n
     mov ax, kernel_string_2 ; Address of string
     push ax ; Argument 1
-    call _writeString
-    add sp, 2 ; Remove arguments
-    ; Function call to writeString
-    ; Function call to stoa_hex
-    mov ax, 4660 ; Load literal
+    call _writeLog
+    add sp, 4 ; Remove arguments
+    ; Function call to enterVGAGraphicsMode
+    call _enterVGAGraphicsMode
+    ; Function call to clearVGAScreen
+    mov ax, 15 ; Load literal
     push ax ; Argument 1
-    call _stoa_hex
+    call _clearVGAScreen
     add sp, 2 ; Remove arguments
-    push ax ; Argument 1
-    call _writeString
-    add sp, 2 ; Remove arguments
-    ; Function call to haltForever
-    call _haltForever
 
 __after_diskload_exit:
     ; Standard function epilogue
@@ -69,6 +73,44 @@ _assert:
 if_end1:
 
 _assert_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: vocalAssert
+_vocalAssert:
+    push bp
+    mov bp, sp
+
+    ; If statement
+    mov ax, [bp+4] ; Load parameter condition
+    test ax, ax ; Test if AX is zero
+    setz al ; Set AL to 1 if AX is zero, 0 otherwise
+    movzx ax, al ; Zero-extend AL to AX
+    test ax, ax
+    jz if_else2
+    ; If true branch
+    ; Function call to writeString
+    ; String literal: Assertion failed!\r\n
+    mov ax, kernel_string_4 ; Address of string
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Function call to haltForever
+    call _haltForever
+    jmp if_end3
+if_else2:
+    ; Else branch
+    ; Function call to writeString
+    ; String literal: Assertion passed!\r\n
+    mov ax, kernel_string_5 ; Address of string
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+if_end3:
+
+_vocalAssert_exit:
     ; Standard function epilogue
     mov sp, bp
     pop bp
@@ -129,22 +171,22 @@ _writeString:
     mov bp, sp
 
     ; While loop
-while_cond2:
+while_cond4:
     mov ax, [bp+4] ; Load parameter str
     ; Dereferencing pointer
     mov bx, ax ; Move pointer address to BX
     cmp bx, 0 ; Check for null pointer
-    je null_ptr_deref_5
+    je null_ptr_deref_7
     xor ah, ah ; Clear high byte for char
     mov al, [bx] ; Load byte (char) from memory
-    jmp ptr_deref_end_5
-null_ptr_deref_5:
+    jmp ptr_deref_end_7
+null_ptr_deref_7:
     ; Null pointer dereference detected
     mov ax, 0 ; Return 0 for null deref
-ptr_deref_end_5:
+ptr_deref_end_7:
     test ax, ax
-    jz while_end4
-while_body3:
+    jz while_end6
+while_body5:
     ; Loop body
     ; Function call to writeChar
     ; Postfix increment of parameter str
@@ -155,18 +197,18 @@ while_body3:
     ; Dereferencing pointer
     mov bx, ax ; Move address to BX
     cmp bx, 0 ; Check for null pointer
-    je null_ptr_deref_6
+    je null_ptr_deref_8
     mov ax, [bx] ; Load word from memory
-    jmp ptr_deref_end_6
-null_ptr_deref_6:
+    jmp ptr_deref_end_8
+null_ptr_deref_8:
     ; Null pointer dereference detected
     mov ax, 0 ; Return 0 for null deref
-ptr_deref_end_6:
+ptr_deref_end_8:
     push ax ; Argument 1
     call _writeChar
     add sp, 2 ; Remove arguments
-    jmp while_cond2
-while_end4:
+    jmp while_cond4
+while_end6:
 
 _writeString_exit:
     ; Standard function epilogue
@@ -174,19 +216,377 @@ _writeString_exit:
     pop bp
     ret
 
-; Function: enterVBEGraphicsMode
-_enterVBEGraphicsMode:
+; Function: writeDebug
+_writeDebug:
+    push bp
+    mov bp, sp
+
+    ; Function call to writeString
+    mov ax, [bp+4] ; Load parameter str
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Function call to writeUartString
+    mov ax, [bp+4] ; Load parameter str
+    push ax ; Argument 1
+    call _writeUartString
+    add sp, 2 ; Remove arguments
+
+_writeDebug_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: writeFarPtr
+_writeFarPtr:
     push bp
     mov bp, sp
 
     ; Inline assembly statement
-    mov ax, 0x4F02
+    push es
     ; Inline assembly statement
-    mov bx, 0x118
+    ; Inline assembly with 1 operands
+    mov ax, [bp+4] ; Load parameter seg
+    mov es, ax
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov ax, [bp+6] ; Load parameter offset
+    mov di, ax
+    ; Inline assembly statement
+    xor ax, ax
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov ax, [bp+8] ; Load parameter byte
+    mov [es:di], al
+    ; Inline assembly statement
+    pop es
+
+_writeFarPtr_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: readFarPtr
+_readFarPtr:
+    push bp
+    mov bp, sp
+
+    ; Local variable declaration: byte
+    push 0 ; Uninitialized local variable
+    ; Inline assembly statement
+    push es
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov ax, [bp+4] ; Load parameter seg
+    mov es, ax
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov ax, [bp+6] ; Load parameter offset
+    mov di, ax
+    ; Inline assembly statement
+    xor ax, ax
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov al, [es:di]
+    mov [bp-2], al ; Store output operand 0 to local variable byte
+    ; Inline assembly statement
+    pop es
+    ; Return statement
+    mov ax, [bp-2] ; Load local variable byte
+    ; Return value in AX
+    jmp _readFarPtr_exit
+
+_readFarPtr_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: writePtr
+_writePtr:
+    push bp
+    mov bp, sp
+
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov ax, [bp+4] ; Load parameter ptr
+    mov di, ax
+    ; Inline assembly statement
+    xor ax, ax
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov ax, [bp+6] ; Load parameter byte
+    mov [es:di], al
+
+_writePtr_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: readPtr
+_readPtr:
+    push bp
+    mov bp, sp
+
+    ; Local variable declaration: byte
+    push 0 ; Uninitialized local variable
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov ax, [bp+4] ; Load parameter ptr
+    mov di, ax
+    ; Inline assembly statement
+    xor ax, ax
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov al, [es:di]
+    mov [bp-2], al ; Store output operand 0 to local variable byte
+    ; Return statement
+    mov ax, [bp-2] ; Load local variable byte
+    ; Return value in AX
+    jmp _readPtr_exit
+
+_readPtr_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: enterVGAGraphicsMode
+_enterVGAGraphicsMode:
+    push bp
+    mov bp, sp
+
+    ; Inline assembly statement
+    mov ax, 0x13
     ; Inline assembly statement
     int 0x10
 
-_enterVBEGraphicsMode_exit:
+_enterVGAGraphicsMode_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: clearVGAScreen
+_clearVGAScreen:
+    push bp
+    mov bp, sp
+
+    ; Function call to memset_far
+    mov ax, 32000 ; Load literal
+    push ax ; Argument 4
+    mov ax, [bp+4] ; Load parameter c
+    push ax ; Argument 3
+    mov ax, 0 ; Load literal
+    push ax ; Argument 2
+    mov ax, 40960 ; Load literal
+    push ax ; Argument 1
+    call _memset_far
+    add sp, 8 ; Remove arguments
+
+_clearVGAScreen_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: drawPixel
+_drawPixel:
+    push bp
+    mov bp, sp
+
+    ; Function call to writeFarPtr
+    mov ax, [bp+8] ; Load parameter color
+    push ax ; Argument 3
+    mov ax, [bp+6] ; Load parameter y
+    push ax ; Save left operand
+    mov ax, 320 ; Load literal
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    imul bx ; Multiplication (signed)
+    push ax ; Save left operand
+    mov ax, [bp+4] ; Load parameter x
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    add ax, bx ; Addition
+    push ax ; Argument 2
+    mov ax, 40960 ; Load literal
+    push ax ; Argument 1
+    call _writeFarPtr
+    add sp, 6 ; Remove arguments
+
+_drawPixel_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: memset_near
+_memset_near:
+    push bp
+    mov bp, sp
+
+    ; Local variable declaration: d
+    mov ax, [bp+4] ; Load parameter dest
+    push ax ; Initialize local variable
+    ; For loop
+    ; For loop initialization
+    ; Local variable declaration: i
+    mov ax, 0 ; Load literal
+    push ax ; Initialize local variable
+    jmp for_cond10
+for_start9:
+    ; For loop body
+    ; Assignment statement
+    mov ax, [bp+6] ; Load parameter value
+    push ax ; Save right-hand side value
+    mov ax, [bp-2] ; Load local variable d
+    push ax ; Save left operand
+    mov ax, [bp-4] ; Load local variable i
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    ; Pointer arithmetic: scale by element size 2
+    shl bx, 1 ; Scale index by 2 for word elements
+    add ax, bx ; Addition
+    mov bx, ax ; Move pointer address to BX
+    pop ax ; Restore right-hand side value
+    mov [bx], ax ; Store word value through pointer
+for_update11:
+    ; For loop update
+    ; Postfix increment of variable i
+    mov ax, [bp-4] ; Load variable value
+    mov bx, ax ; Save original value to BX
+    inc bx ; Increment value
+    mov [bp-4], bx ; Store incremented value back
+for_cond10:
+    ; For loop condition
+    mov ax, [bp-4] ; Load local variable i
+    push ax ; Save left operand
+    mov ax, [bp+8] ; Load parameter size
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    cmp ax, bx ; Less than comparison
+    mov ax, 0  ; Assume false
+    jl lt_true_13
+    jmp lt_end_13
+lt_true_13:
+    mov ax, 1  ; Set true
+lt_end_13:
+    test ax, ax
+    jnz for_start9
+for_end12:
+
+_memset_near_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: memset_far
+_memset_far:
+    push bp
+    mov bp, sp
+
+    ; Local variable declaration: old_seg
+    ; Function call to getESSegment
+    call _getESSegment
+    push ax ; Initialize local variable
+    ; Function call to setESSegment
+    mov ax, [bp+4] ; Load parameter seg
+    push ax ; Argument 1
+    call _setESSegment
+    add sp, 2 ; Remove arguments
+    ; If statement
+    mov ax, [bp+6] ; Load parameter offset
+    push ax ; Save left operand
+    mov ax, [bp+10] ; Load parameter size
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    add ax, bx ; Addition
+    push ax ; Save left operand
+    mov ax, 65535 ; Load literal
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    cmp ax, bx ; Greater than comparison
+    mov ax, 0  ; Assume false
+    jg gt_true_16
+    jmp gt_end_16
+gt_true_16:
+    mov ax, 1  ; Set true
+gt_end_16:
+    test ax, ax
+    jz if_end15
+    ; If true branch
+    ; Assignment statement
+    mov ax, 65535 ; Load literal
+    push ax ; Save left operand
+    mov ax, [bp+6] ; Load parameter offset
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    sub ax, bx ; Subtraction
+    push ax ; Save left operand
+    mov ax, 1 ; Load literal
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    add ax, bx ; Addition
+    mov [bp+10], ax ; Store in parameter size
+if_end15:
+    ; For loop
+    ; For loop initialization
+    ; Local variable declaration: i
+    mov ax, 0 ; Load literal
+    push ax ; Initialize local variable
+    jmp for_cond18
+for_start17:
+    ; For loop body
+    ; Function call to writeFarPtr
+    mov ax, [bp+8] ; Load parameter value
+    push ax ; Argument 3
+    mov ax, [bp+6] ; Load parameter offset
+    push ax ; Save left operand
+    mov ax, [bp-4] ; Load local variable i
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    add ax, bx ; Addition
+    push ax ; Argument 2
+    mov ax, [bp+4] ; Load parameter seg
+    push ax ; Argument 1
+    call _writeFarPtr
+    add sp, 6 ; Remove arguments
+for_update19:
+    ; For loop update
+    ; Postfix increment of variable i
+    mov ax, [bp-4] ; Load variable value
+    mov bx, ax ; Save original value to BX
+    inc bx ; Increment value
+    mov [bp-4], bx ; Store incremented value back
+for_cond18:
+    ; For loop condition
+    mov ax, [bp-4] ; Load local variable i
+    push ax ; Save left operand
+    mov ax, [bp+10] ; Load parameter size
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    cmp ax, bx ; Less than comparison
+    mov ax, 0  ; Assume false
+    jl lt_true_21
+    jmp lt_end_21
+lt_true_21:
+    mov ax, 1  ; Set true
+lt_end_21:
+    test ax, ax
+    jnz for_start17
+for_end20:
+    ; Function call to setESSegment
+    mov ax, [bp-2] ; Load local variable old_seg
+    push ax ; Argument 1
+    call _setESSegment
+    add sp, 2 ; Remove arguments
+
+_memset_far_exit:
     ; Standard function epilogue
     mov sp, bp
     pop bp
@@ -201,10 +601,10 @@ _strlen:
     mov ax, 0 ; Load literal
     push ax ; Initialize local variable
     ; While loop
-while_cond7:
+while_cond22:
     mov ax, [bp+4] ; Load parameter str
     test ax, ax ; logical AND left test
-    jz land_false10 ; left false, skip right
+    jz land_false25 ; left false, skip right
     mov ax, [bp+4] ; Load parameter str
     push ax ; Save left operand
     mov ax, [bp-2] ; Load local variable len
@@ -214,239 +614,38 @@ while_cond7:
     ; Dereferencing pointer
     mov bx, ax ; Move address to BX
     cmp bx, 0 ; Check for null pointer
-    je null_ptr_deref_12
+    je null_ptr_deref_27
     xor ah, ah ; Clear high byte for char
     mov al, [bx] ; Load byte (char) from memory
-    jmp ptr_deref_end_12
-null_ptr_deref_12:
+    jmp ptr_deref_end_27
+null_ptr_deref_27:
     ; Null pointer dereference detected
     mov ax, 0 ; Return 0 for null deref
-ptr_deref_end_12:
+ptr_deref_end_27:
     test ax, ax ; logical AND right test
-    jz land_false10 ; right false, result false
+    jz land_false25 ; right false, result false
     mov ax, 1 ; both true -> true
-    jmp land_end11
-land_false10:
+    jmp land_end26
+land_false25:
     mov ax, 0 ; false
-land_end11:
+land_end26:
     test ax, ax
-    jz while_end9
-while_body8:
+    jz while_end24
+while_body23:
     ; Loop body
     ; Postfix increment of variable len
     mov ax, [bp-2] ; Load variable value
     mov bx, ax ; Save original value to BX
     inc bx ; Increment value
     mov [bp-2], bx ; Store incremented value back
-    jmp while_cond7
-while_end9:
+    jmp while_cond22
+while_end24:
     ; Return statement
     mov ax, [bp-2] ; Load local variable len
+    ; Return value in AX
     jmp _strlen_exit
 
 _strlen_exit:
-    ; Standard function epilogue
-    mov sp, bp
-    pop bp
-    ret
-
-; Function: stoa
-_stoa:
-    push bp
-    mov bp, sp
-
-    ; Array variable without initializers: buffer[20]
-    ; Setting up pointer to array buffer[20]
-    mov ax, _kernel_stoa_buffer_0 ; Address of array
-    push ax ; Store pointer to array
-    ; Local variable declaration: j
-    mov ax, 0 ; Load literal
-    push ax ; Initialize local variable
-    ; If statement
-    mov ax, [bp+4] ; Load parameter i
-    push ax ; Save left operand
-    mov ax, 0 ; Load literal
-    mov bx, ax ; Right operand to bx
-    pop ax ; Restore left operand
-    cmp ax, bx ; Less than comparison
-    mov ax, 0  ; Assume false
-    jl lt_true_15
-    jmp lt_end_15
-lt_true_15:
-    mov ax, 1  ; Set true
-lt_end_15:
-    test ax, ax
-    jz if_end14
-    ; If true branch
-    ; Assignment statement
-    mov ax, 45 ; Load literal
-    push ax ; Save right-hand side value
-    mov ax, [bp-2] ; Load local variable buffer
-    push ax ; Save left operand
-    ; Postfix increment of variable j
-    mov ax, [bp-4] ; Load variable value
-    mov bx, ax ; Save original value to BX
-    inc bx ; Increment value
-    mov [bp-4], bx ; Store incremented value back
-    mov bx, ax ; Right operand to bx
-    pop ax ; Restore left operand
-    add ax, bx ; Addition
-    mov bx, ax ; Move pointer address to BX
-    pop ax ; Restore right-hand side value
-    mov [bx], al ; Store byte value through pointer
-    ; Assignment statement
-    mov ax, [bp+4] ; Load parameter i
-    neg ax ; Negate value
-    mov [bp+4], ax ; Store in parameter i
-if_end14:
-    ; If statement
-    mov ax, [bp+4] ; Load parameter i
-    push ax ; Save left operand
-    mov ax, 0 ; Load literal
-    mov bx, ax ; Right operand to bx
-    pop ax ; Restore left operand
-    cmp ax, bx ; Equal comparison
-    mov ax, 0  ; Assume false
-    je eq_true_18
-    jmp eq_end_18
-eq_true_18:
-    mov ax, 1  ; Set true
-eq_end_18:
-    test ax, ax
-    jz if_else16
-    ; If true branch
-    ; Assignment statement
-    mov ax, 48 ; Load literal
-    push ax ; Save right-hand side value
-    mov ax, [bp-2] ; Load local variable buffer
-    push ax ; Save left operand
-    ; Postfix increment of variable j
-    mov ax, [bp-4] ; Load variable value
-    mov bx, ax ; Save original value to BX
-    inc bx ; Increment value
-    mov [bp-4], bx ; Store incremented value back
-    mov bx, ax ; Right operand to bx
-    pop ax ; Restore left operand
-    add ax, bx ; Addition
-    mov bx, ax ; Move pointer address to BX
-    pop ax ; Restore right-hand side value
-    mov [bx], al ; Store byte value through pointer
-    jmp if_end17
-if_else16:
-    ; Else branch
-    ; Local variable declaration: k
-    mov ax, [bp+4] ; Load parameter i
-    push ax ; Initialize local variable
-    ; While loop
-while_cond19:
-    mov ax, [bp-6] ; Load local variable k
-    push ax ; Save left operand
-    mov ax, 0 ; Load literal
-    mov bx, ax ; Right operand to bx
-    pop ax ; Restore left operand
-    cmp ax, bx ; Greater than comparison
-    mov ax, 0  ; Assume false
-    jg gt_true_22
-    jmp gt_end_22
-gt_true_22:
-    mov ax, 1  ; Set true
-gt_end_22:
-    test ax, ax
-    jz while_end21
-while_body20:
-    ; Loop body
-    ; Assignment statement
-    mov ax, [bp-6] ; Load local variable k for compound assignment
-    push ax ; Save old value
-    mov ax, 10 ; Load literal
-    push ax ; Save RHS value
-    pop bx ; RHS value
-    pop ax ; Old LHS value
-    cwd ; Sign extend AX into DX:AX for division
-    idiv bx ; /=
-    mov [bp-6], ax ; Store in local variable k
-    ; Postfix increment of variable j
-    mov ax, [bp-4] ; Load variable value
-    mov bx, ax ; Save original value to BX
-    inc bx ; Increment value
-    mov [bp-4], bx ; Store incremented value back
-    jmp while_cond19
-while_end21:
-    ; Assignment statement
-    mov ax, 0 ; Load literal
-    push ax ; Save right-hand side value
-    mov ax, [bp-2] ; Load local variable buffer
-    push ax ; Save left operand
-    mov ax, [bp-4] ; Load local variable j
-    mov bx, ax ; Right operand to bx
-    pop ax ; Restore left operand
-    add ax, bx ; Addition
-    mov bx, ax ; Move pointer address to BX
-    pop ax ; Restore right-hand side value
-    mov [bx], al ; Store byte value through pointer
-    ; While loop
-while_cond23:
-    mov ax, [bp+4] ; Load parameter i
-    push ax ; Save left operand
-    mov ax, 0 ; Load literal
-    mov bx, ax ; Right operand to bx
-    pop ax ; Restore left operand
-    cmp ax, bx ; Greater than comparison
-    mov ax, 0  ; Assume false
-    jg gt_true_26
-    jmp gt_end_26
-gt_true_26:
-    mov ax, 1  ; Set true
-gt_end_26:
-    test ax, ax
-    jz while_end25
-while_body24:
-    ; Loop body
-    ; Assignment statement
-    mov ax, [bp+4] ; Load parameter i
-    push ax ; Save left operand
-    mov ax, 10 ; Load literal
-    mov bx, ax ; Right operand to bx
-    pop ax ; Restore left operand
-    cwd ; Sign extend AX into DX:AX for signed mod
-    idiv bx ; Division (signed)
-    mov ax, dx ; Remainder is in DX
-    push ax ; Save left operand
-    mov ax, 48 ; Load literal
-    mov bx, ax ; Right operand to bx
-    pop ax ; Restore left operand
-    add ax, bx ; Addition
-    push ax ; Save right-hand side value
-    mov ax, [bp-2] ; Load local variable buffer
-    push ax ; Save left operand
-    ; Prefix decrement of variable j
-    mov ax, [bp-4] ; Load variable value
-    dec ax ; Decrement value
-    mov [bp-4], ax ; Store decremented value back
-    mov bx, ax ; Right operand to bx
-    pop ax ; Restore left operand
-    add ax, bx ; Addition
-    mov bx, ax ; Move pointer address to BX
-    pop ax ; Restore right-hand side value
-    mov [bx], al ; Store byte value through pointer
-    ; Assignment statement
-    mov ax, [bp+4] ; Load parameter i for compound assignment
-    push ax ; Save old value
-    mov ax, 10 ; Load literal
-    push ax ; Save RHS value
-    pop bx ; RHS value
-    pop ax ; Old LHS value
-    cwd ; Sign extend AX into DX:AX for division
-    idiv bx ; /=
-    mov [bp+4], ax ; Store in parameter i
-    jmp while_cond23
-while_end25:
-if_end17:
-    ; Return statement
-    mov ax, [bp-2] ; Load local variable buffer
-    jmp _stoa_exit
-
-_stoa_exit:
     ; Standard function epilogue
     mov sp, bp
     pop bp
@@ -459,7 +658,7 @@ _stoa_hex:
 
     ; Array variable without initializers: buffer[7]
     ; Setting up pointer to array buffer[7]
-    mov ax, _kernel_stoa_hex_buffer_1 ; Address of array
+    mov ax, _kernel_stoa_hex_buffer_0 ; Address of array
     push ax ; Store pointer to array
     ; Assignment statement
     mov ax, 48 ; Load literal
@@ -531,13 +730,13 @@ _stoa_hex:
     pop ax ; Restore left operand
     cmp ax, bx ; Greater than comparison
     mov ax, 0  ; Assume false
-    jg gt_true_29
-    jmp gt_end_29
-gt_true_29:
+    jg gt_true_30
+    jmp gt_end_30
+gt_true_30:
     mov ax, 1  ; Set true
-gt_end_29:
+gt_end_30:
     test ax, ax
-    jz if_end28
+    jz if_end29
     ; If true branch
     ; Assignment statement
     mov ax, 7 ; Load literal
@@ -551,7 +750,7 @@ gt_end_29:
     mov bx, ax ; Move pointer address to BX
     pop ax ; Restore right-hand side value
     mov [bx], al ; Store byte value through pointer
-if_end28:
+if_end29:
     ; Assignment statement
     mov ax, [bp+4] ; Load parameter i
     push ax ; Save left operand
@@ -592,13 +791,13 @@ if_end28:
     pop ax ; Restore left operand
     cmp ax, bx ; Greater than comparison
     mov ax, 0  ; Assume false
-    jg gt_true_32
-    jmp gt_end_32
-gt_true_32:
+    jg gt_true_33
+    jmp gt_end_33
+gt_true_33:
     mov ax, 1  ; Set true
-gt_end_32:
+gt_end_33:
     test ax, ax
-    jz if_end31
+    jz if_end32
     ; If true branch
     ; Assignment statement
     mov ax, 7 ; Load literal
@@ -612,7 +811,7 @@ gt_end_32:
     mov bx, ax ; Move pointer address to BX
     pop ax ; Restore right-hand side value
     mov [bx], al ; Store byte value through pointer
-if_end31:
+if_end32:
     ; Assignment statement
     mov ax, [bp+4] ; Load parameter i
     push ax ; Save left operand
@@ -653,13 +852,13 @@ if_end31:
     pop ax ; Restore left operand
     cmp ax, bx ; Greater than comparison
     mov ax, 0  ; Assume false
-    jg gt_true_35
-    jmp gt_end_35
-gt_true_35:
+    jg gt_true_36
+    jmp gt_end_36
+gt_true_36:
     mov ax, 1  ; Set true
-gt_end_35:
+gt_end_36:
     test ax, ax
-    jz if_end34
+    jz if_end35
     ; If true branch
     ; Assignment statement
     mov ax, 7 ; Load literal
@@ -673,7 +872,7 @@ gt_end_35:
     mov bx, ax ; Move pointer address to BX
     pop ax ; Restore right-hand side value
     mov [bx], al ; Store byte value through pointer
-if_end34:
+if_end35:
     ; Assignment statement
     mov ax, [bp+4] ; Load parameter i
     push ax ; Save left operand
@@ -714,13 +913,13 @@ if_end34:
     pop ax ; Restore left operand
     cmp ax, bx ; Greater than comparison
     mov ax, 0  ; Assume false
-    jg gt_true_38
-    jmp gt_end_38
-gt_true_38:
+    jg gt_true_39
+    jmp gt_end_39
+gt_true_39:
     mov ax, 1  ; Set true
-gt_end_38:
+gt_end_39:
     test ax, ax
-    jz if_end37
+    jz if_end38
     ; If true branch
     ; Assignment statement
     mov ax, 7 ; Load literal
@@ -734,9 +933,10 @@ gt_end_38:
     mov bx, ax ; Move pointer address to BX
     pop ax ; Restore right-hand side value
     mov [bx], al ; Store byte value through pointer
-if_end37:
+if_end38:
     ; Return statement
     mov ax, [bp-2] ; Load local variable buffer
+    ; Return value in AX
     jmp _stoa_hex_exit
 
 _stoa_hex_exit:
@@ -745,14 +945,307 @@ _stoa_hex_exit:
     pop bp
     ret
 
+; Function: setESSegment
+_setESSegment:
+    push bp
+    mov bp, sp
+
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov ax, [bp+4] ; Load parameter es
+    mov es, ax
+
+_setESSegment_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: getESSegment
+_getESSegment:
+    push bp
+    mov bp, sp
+
+    ; Local variable declaration: es
+    push 0 ; Uninitialized local variable
+    ; Inline assembly statement
+    mov ax, es
+    ; Inline assembly statement
+    ; Inline assembly with 1 operands
+    mov ax, ax
+    mov [bp-2], ax ; Store output operand 0 to local variable es
+    ; Return statement
+    mov ax, [bp-2] ; Load local variable es
+    ; Return value in AX
+    jmp _getESSegment_exit
+
+_getESSegment_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: initUart
+_initUart:
+    push bp
+    mov bp, sp
+
+    ; Inline assembly statement
+    mov dx, 0x3F8
+    ; Inline assembly statement
+    mov al, 0x80
+    ; Inline assembly statement
+    out dx, al
+    ; Inline assembly statement
+    mov al, 0x03
+    ; Inline assembly statement
+    out dx, al
+    ; Inline assembly statement
+    mov al, 0x03
+    ; Inline assembly statement
+    out dx, al
+    ; Inline assembly statement
+    mov al, 0x01
+    ; Inline assembly statement
+    out dx, al
+    ; Function call to writeUartString
+    ; String literal: \r
+    mov ax, kernel_string_6 ; Address of string
+    push ax ; Argument 1
+    call _writeUartString
+    add sp, 2 ; Remove arguments
+
+_initUart_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: writeUart
+_writeUart:
+    push bp
+    mov bp, sp
+
+    ; Inline assembly statement
+    mov dx, 0x3F8
+    ; Inline assembly statement
+    mov al, [bp+4]
+    ; Inline assembly statement
+    out dx, al
+
+_writeUart_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: writeUartString
+_writeUartString:
+    push bp
+    mov bp, sp
+
+    ; While loop
+while_cond40:
+    mov ax, [bp+4] ; Load parameter str
+    ; Dereferencing pointer
+    mov bx, ax ; Move pointer address to BX
+    cmp bx, 0 ; Check for null pointer
+    je null_ptr_deref_43
+    xor ah, ah ; Clear high byte for char
+    mov al, [bx] ; Load byte (char) from memory
+    jmp ptr_deref_end_43
+null_ptr_deref_43:
+    ; Null pointer dereference detected
+    mov ax, 0 ; Return 0 for null deref
+ptr_deref_end_43:
+    test ax, ax
+    jz while_end42
+while_body41:
+    ; Loop body
+    ; Function call to writeUart
+    ; Postfix increment of parameter str
+    mov ax, [bp+4] ; Load parameter value
+    mov bx, ax ; Save original value to BX
+    inc bx ; Increment value
+    mov [bp+4], bx ; Store incremented value back
+    ; Dereferencing pointer
+    mov bx, ax ; Move address to BX
+    cmp bx, 0 ; Check for null pointer
+    je null_ptr_deref_44
+    mov ax, [bx] ; Load word from memory
+    jmp ptr_deref_end_44
+null_ptr_deref_44:
+    ; Null pointer dereference detected
+    mov ax, 0 ; Return 0 for null deref
+ptr_deref_end_44:
+    push ax ; Argument 1
+    call _writeUart
+    add sp, 2 ; Remove arguments
+    jmp while_cond40
+while_end42:
+
+_writeUartString_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
+; Function: writeLog
+_writeLog:
+    push bp
+    mov bp, sp
+
+    ; Local variable declaration: prefix
+    mov ax, 0 ; Load literal
+    push ax ; Initialize local variable
+    ; If statement
+    mov ax, [bp+6] ; Load parameter level
+    push ax ; Save left operand
+    mov ax, 0 ; Load literal
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    cmp ax, bx ; Equal comparison
+    mov ax, 0  ; Assume false
+    je eq_true_47
+    jmp eq_end_47
+eq_true_47:
+    mov ax, 1  ; Set true
+eq_end_47:
+    test ax, ax
+    jz if_else45
+    ; If true branch
+    ; Assignment statement
+    ; String literal: [OKAY] 
+    mov ax, kernel_string_7 ; Address of string
+    mov [bp-2], ax ; Store in local variable prefix
+    jmp if_end46
+if_else45:
+    ; Else branch
+    ; If statement
+    mov ax, [bp+6] ; Load parameter level
+    push ax ; Save left operand
+    mov ax, 1 ; Load literal
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    cmp ax, bx ; Equal comparison
+    mov ax, 0  ; Assume false
+    je eq_true_50
+    jmp eq_end_50
+eq_true_50:
+    mov ax, 1  ; Set true
+eq_end_50:
+    test ax, ax
+    jz if_else48
+    ; If true branch
+    ; Assignment statement
+    ; String literal: [FAIL] 
+    mov ax, kernel_string_8 ; Address of string
+    mov [bp-2], ax ; Store in local variable prefix
+    jmp if_end49
+if_else48:
+    ; Else branch
+    ; If statement
+    mov ax, [bp+6] ; Load parameter level
+    push ax ; Save left operand
+    mov ax, 2 ; Load literal
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    cmp ax, bx ; Equal comparison
+    mov ax, 0  ; Assume false
+    je eq_true_53
+    jmp eq_end_53
+eq_true_53:
+    mov ax, 1  ; Set true
+eq_end_53:
+    test ax, ax
+    jz if_else51
+    ; If true branch
+    ; Assignment statement
+    ; String literal: [INFO] 
+    mov ax, kernel_string_9 ; Address of string
+    mov [bp-2], ax ; Store in local variable prefix
+    jmp if_end52
+if_else51:
+    ; Else branch
+    ; If statement
+    mov ax, [bp+6] ; Load parameter level
+    push ax ; Save left operand
+    mov ax, 3 ; Load literal
+    mov bx, ax ; Right operand to bx
+    pop ax ; Restore left operand
+    cmp ax, bx ; Equal comparison
+    mov ax, 0  ; Assume false
+    je eq_true_56
+    jmp eq_end_56
+eq_true_56:
+    mov ax, 1  ; Set true
+eq_end_56:
+    test ax, ax
+    jz if_else54
+    ; If true branch
+    ; Assignment statement
+    ; String literal: [WARN] 
+    mov ax, kernel_string_10 ; Address of string
+    mov [bp-2], ax ; Store in local variable prefix
+    jmp if_end55
+if_else54:
+    ; Else branch
+    ; Assignment statement
+    ; String literal: [UNKW] 
+    mov ax, kernel_string_11 ; Address of string
+    mov [bp-2], ax ; Store in local variable prefix
+if_end55:
+if_end52:
+if_end49:
+if_end46:
+    ; If statement
+    mov ax, [bp-2] ; Load local variable prefix
+    test ax, ax
+    jz if_end58
+    ; If true branch
+    ; Function call to writeString
+    mov ax, [bp-2] ; Load local variable prefix
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Function call to writeUartString
+    mov ax, [bp-2] ; Load local variable prefix
+    push ax ; Argument 1
+    call _writeUartString
+    add sp, 2 ; Remove arguments
+if_end58:
+    ; Function call to writeString
+    mov ax, [bp+4] ; Load parameter str
+    push ax ; Argument 1
+    call _writeString
+    add sp, 2 ; Remove arguments
+    ; Function call to writeUartString
+    mov ax, [bp+4] ; Load parameter str
+    push ax ; Argument 1
+    call _writeUartString
+    add sp, 2 ; Remove arguments
+
+_writeLog_exit:
+    ; Standard function epilogue
+    mov sp, bp
+    pop bp
+    ret
+
 
 ; Data section for strings and arrays
 ; String literals section
-kernel_string_0: db 78, 67, 67, 32, 66, 111, 111, 116, 108, 111, 97, 100, 101, 114, 13, 10, 0  ; null terminator
-kernel_string_1: db 76, 111, 97, 100, 105, 110, 103, 32, 107, 101, 114, 110, 101, 108, 46, 46, 46, 13, 10, 0  ; null terminator
-kernel_string_2: db 73, 110, 116, 101, 103, 101, 114, 32, 116, 111, 32, 115, 116, 114, 105, 110, 103, 58, 32, 0  ; null terminator
+kernel_string_0: db 85, 65, 82, 84, 32, 105, 110, 105, 116, 105, 97, 108, 105, 122, 101, 100, 46, 13, 10, 0  ; null terminator
+kernel_string_1: db 78, 67, 67, 32, 66, 111, 111, 116, 108, 111, 97, 100, 101, 114, 13, 10, 0  ; null terminator
+kernel_string_2: db 69, 110, 97, 98, 108, 105, 110, 103, 32, 86, 71, 65, 46, 46, 46, 13, 10, 0  ; null terminator
 kernel_string_3: db 65, 115, 115, 101, 114, 116, 105, 111, 110, 32, 102, 97, 105, 108, 101, 100, 33, 13, 10, 0  ; null terminator
+kernel_string_4: db 65, 115, 115, 101, 114, 116, 105, 111, 110, 32, 102, 97, 105, 108, 101, 100, 33, 13, 10, 0  ; null terminator
+kernel_string_5: db 65, 115, 115, 101, 114, 116, 105, 111, 110, 32, 112, 97, 115, 115, 101, 100, 33, 13, 10, 0  ; null terminator
+kernel_string_6: db 13, 0  ; null terminator
+kernel_string_7: db 91, 79, 75, 65, 89, 93, 32, 0  ; null terminator
+kernel_string_8: db 91, 70, 65, 73, 76, 93, 32, 0  ; null terminator
+kernel_string_9: db 91, 73, 78, 70, 79, 93, 32, 0  ; null terminator
+kernel_string_10: db 91, 87, 65, 82, 78, 93, 32, 0  ; null terminator
+kernel_string_11: db 91, 85, 78, 75, 87, 93, 32, 0  ; null terminator
 
 ; Array declarations section
-_kernel_stoa_buffer_0: times 20 db 0 ; Array of 20 bytes
-_kernel_stoa_hex_buffer_1: times 7 db 0 ; Array of 7 bytes
+_kernel_stoa_hex_buffer_0: times 7 db 0 ; Array of 7 bytes

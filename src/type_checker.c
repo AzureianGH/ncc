@@ -1,5 +1,7 @@
 #include "ast.h"
 #include "error_manager.h"
+#include "struct_support.h"
+#include "struct_codegen.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -155,6 +157,53 @@ TypeInfo* getTypeInfoFromExpression(ASTNode* expr) {
             castTypeInfo.is_array = 0;
             
             return &castTypeInfo;
+        }
+    }
+      // For struct member access
+    if (expr->type == NODE_MEMBER_ACCESS) {
+        static TypeInfo memberTypeInfo;
+        memset(&memberTypeInfo, 0, sizeof(TypeInfo));
+        
+        // Get the base type (struct or struct pointer)
+        TypeInfo* baseType = getTypeInfoFromExpression(expr->left);
+        if (!baseType) {
+            reportError(-1, "Cannot access member of non-struct type");
+            return NULL;
+        }
+        
+        // Handle struct pointer access (->)
+        if (expr->member_access.op == OP_ARROW) {
+            if (!baseType->is_pointer || baseType->type != TYPE_STRUCT) {
+                reportError(-1, "Arrow operator (->) requires a struct pointer");
+                return NULL;
+            }
+            
+            // Get the member type from the struct
+            TypeInfo* memberType = getMemberType(baseType->struct_info, expr->member_access.member_name);
+            if (!memberType) {
+                reportError(-1, "Struct '%s' has no member named '%s'", 
+                           baseType->struct_info->name, expr->member_access.member_name);
+                return NULL;
+            }
+            
+            return memberType;
+        }
+        // Handle direct struct access (.)
+        else if (expr->member_access.op == OP_DOT) {
+            if (baseType->type != TYPE_STRUCT) {
+                reportError(-1, "Dot operator (.) requires a struct type");
+                return NULL;
+            }
+            
+            // Get the member type from the struct
+            TypeInfo* memberType = getMemberType(baseType->struct_info, expr->member_access.member_name);
+            if (!memberType) {
+                reportError(-1, "Struct '%s' has no member named '%s'", 
+                           baseType->struct_info->name, expr->member_access.member_name);
+                return NULL;
+            }
+            
+            return memberType;
         }
     }
     

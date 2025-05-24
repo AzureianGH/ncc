@@ -257,6 +257,13 @@ void generateUnaryOp(ASTNode* node) {
                             case TYPE_FAR_POINTER:
                                 elementSize = 4;
                                 break;
+                            case TYPE_STRUCT:
+                                if (typeInfo->struct_info) {
+                                    elementSize = typeInfo->struct_info->size;
+                                } else {
+                                    elementSize = 2; // Default if struct info not available
+                                }
+                                break;
                             default:
                                 elementSize = 2; // Default
                                 break;

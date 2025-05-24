@@ -18,9 +18,9 @@ const char* getTokenName(TokenType type) {
         case TOKEN_ELSE: return "TOKEN_ELSE";
         case TOKEN_WHILE: return "TOKEN_WHILE";
         case TOKEN_FOR: return "TOKEN_FOR";
-        case TOKEN_RETURN: return "TOKEN_RETURN";
-        case TOKEN_BOOL: return "TOKEN_BOOL";
+        case TOKEN_RETURN: return "TOKEN_RETURN";        case TOKEN_BOOL: return "TOKEN_BOOL";
         case TOKEN_TRUE: return "TOKEN_TRUE";        case TOKEN_FALSE: return "TOKEN_FALSE";
+        case TOKEN_STRUCT: return "TOKEN_STRUCT";
         case TOKEN_ATTR_OPEN: return "TOKEN_ATTR_OPEN";
         case TOKEN_ATTR_CLOSE: return "TOKEN_ATTR_CLOSE";
         case TOKEN_ELLIPSIS: return "TOKEN_ELLIPSIS (...)";
