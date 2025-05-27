@@ -447,9 +447,15 @@ Token getNextToken() {
                 position++;
                 column++;
             } else if (source[position] == '<') {
-                token.type = TOKEN_LEFT_SHIFT;
                 position++;
                 column++;
+                if (source[position] == '=') {
+                    token.type = TOKEN_LEFT_SHIFT_ASSIGN;  // <<= operator
+                    position++;
+                    column++;
+                } else {
+                    token.type = TOKEN_LEFT_SHIFT;
+                }
             } else {
                 token.type = TOKEN_LT;
             }
@@ -461,9 +467,15 @@ Token getNextToken() {
                 position++;
                 column++;
             } else if (source[position] == '>') {
-                token.type = TOKEN_RIGHT_SHIFT;
                 position++;
                 column++;
+                if (source[position] == '=') {
+                    token.type = TOKEN_RIGHT_SHIFT_ASSIGN;  // >>= operator
+                    position++;
+                    column++;
+                } else {
+                    token.type = TOKEN_RIGHT_SHIFT;
+                }
             } else {
                 token.type = TOKEN_GT;
             }

@@ -125,6 +125,17 @@ int addStringLiteral(const char* str) {
         return -1;
     }
     
+    // Check if string merging is enabled and look for identical strings
+    if (optimizationState.mergeStrings) {
+        for (int i = 0; i < stringLiteralCount; i++) {
+            if (strcmp(stringLiterals[i], escaped) == 0) {
+                // Found an identical string, reuse it
+                free(escaped);
+                return i;
+            }
+        }
+    }
+    
     // Add to string table
     if (stringLiterals == NULL) {
         stringLiterals = (char**)malloc(sizeof(char*));

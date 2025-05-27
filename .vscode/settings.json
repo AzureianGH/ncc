@@ -18,6 +18,9 @@
         "error_manager.h": "c",
         "ast.h": "c",
         "limits": "c",
-        "stdarg.h": "c"
-    }
+        "stdarg.h": "c",
+        "color.h": "c",
+        "preprocessor.h": "c"
+    },
+    "makefile.configureOnOpen": false
 }

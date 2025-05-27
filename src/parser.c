@@ -776,7 +776,8 @@ ASTNode* parseAssignmentExpression() {
     ASTNode* left = parseTernaryExpression();
 
     if (tokenIs(TOKEN_ASSIGN) || tokenIs(TOKEN_PLUS_ASSIGN) || tokenIs(TOKEN_MINUS_ASSIGN) ||
-        tokenIs(TOKEN_MUL_ASSIGN) || tokenIs(TOKEN_DIV_ASSIGN) || tokenIs(TOKEN_MOD_ASSIGN)) {
+        tokenIs(TOKEN_MUL_ASSIGN) || tokenIs(TOKEN_DIV_ASSIGN) || tokenIs(TOKEN_MOD_ASSIGN) ||
+        tokenIs(TOKEN_LEFT_SHIFT_ASSIGN) || tokenIs(TOKEN_RIGHT_SHIFT_ASSIGN)) {
         
         ASTNode* node = createNode(NODE_ASSIGNMENT);
         // Determine assignment operator
@@ -795,10 +796,16 @@ ASTNode* parseAssignmentExpression() {
         } else if (tokenIs(TOKEN_MOD_ASSIGN)) {
             node->assignment.op = OP_MOD_ASSIGN;
             consume(TOKEN_MOD_ASSIGN);
+        } else if (tokenIs(TOKEN_LEFT_SHIFT_ASSIGN)) {
+            node->assignment.op = OP_LEFT_SHIFT_ASSIGN;
+            consume(TOKEN_LEFT_SHIFT_ASSIGN);
+        } else if (tokenIs(TOKEN_RIGHT_SHIFT_ASSIGN)) {
+            node->assignment.op = OP_RIGHT_SHIFT_ASSIGN;
+            consume(TOKEN_RIGHT_SHIFT_ASSIGN);
         } else {
             node->assignment.op = 0; // simple assignment
             consume(TOKEN_ASSIGN);
-        }        // Check if left side is a void pointer dereference (i.e., *void_ptr = value)
+        }// Check if left side is a void pointer dereference (i.e., *void_ptr = value)
         if (left->type == NODE_UNARY_OP && left->unary_op.op == UNARY_DEREFERENCE) {
             if (isVoidPointer(left->right)) {
                 Token token = getCurrentToken();

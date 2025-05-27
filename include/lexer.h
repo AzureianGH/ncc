@@ -71,14 +71,14 @@ typedef enum {
     TOKEN_BITWISE_NOT,// ~    
     TOKEN_XOR,        // ^
     TOKEN_ARROW,      // ->
-    TOKEN_QUESTION,   // ?
-
-    // Compound assignment operators
+    TOKEN_QUESTION,   // ?    // Compound assignment operators
     TOKEN_PLUS_ASSIGN,  // +=
     TOKEN_MINUS_ASSIGN, // -=
     TOKEN_MUL_ASSIGN,   // *=
     TOKEN_DIV_ASSIGN,   // /=
-    TOKEN_MOD_ASSIGN,   // %=  
+    TOKEN_MOD_ASSIGN,   // %=
+    TOKEN_LEFT_SHIFT_ASSIGN,  // <<=
+    TOKEN_RIGHT_SHIFT_ASSIGN, // >>=
 
     // Punctuation
     TOKEN_LBRACE,     // {

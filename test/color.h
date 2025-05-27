@@ -19,5 +19,4 @@
 #define VGA_COLOR_YELLOW        14
 #define VGA_COLOR_WHITE         15
 
-
 #endif

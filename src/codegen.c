@@ -15,6 +15,12 @@
 extern TypeInfo* getTypeInfo(const char* name);
 extern TypeInfo* getTypeInfoFromExpression(ASTNode* expr);
 
+// Define the optimization state
+OptimizationState optimizationState = {
+    .level = OPT_LEVEL_NONE,
+    .mergeStrings = 0
+};
+
 // Output file for assembly code
 FILE* asmFile = NULL;
 
@@ -599,8 +605,7 @@ void generateStatement(ASTNode* node) {
                                 fprintf(asmFile, "    idiv bx ; /=\n");
                             }
                         }
-                        break;
-                    case OP_MOD_ASSIGN:
+                        break;                    case OP_MOD_ASSIGN:
                         {
                             // Check if variable is unsigned
                             TypeInfo* typeInfo = getTypeInfo(node->left->identifier);
@@ -616,6 +621,15 @@ void generateStatement(ASTNode* node) {
                                 fprintf(asmFile, "    mov ax, dx ; remainder in DX\n");
                             }
                         }
+                        break;
+                    case OP_LEFT_SHIFT_ASSIGN:
+                        fprintf(asmFile, "    mov cx, bx ; Set shift count in CX\n");
+                        fprintf(asmFile, "    shl ax, cl ; Shift left (<<= operator)\n");
+                        break;
+                    case OP_RIGHT_SHIFT_ASSIGN:
+                        fprintf(asmFile, "    mov cx, bx ; Set shift count in CX\n");
+                        fprintf(asmFile, "    sar ax, cl ; Shift right (arithmetic) (>>= operator)\n");
+                        break;
                     default:
                         break;
                 }
@@ -862,18 +876,18 @@ void generateVariableDeclaration(ASTNode* node) {
                     if (member->type_info.type == TYPE_CHAR || 
                         member->type_info.type == TYPE_UNSIGNED_CHAR || 
                         member->type_info.type == TYPE_BOOL) {
-                        fprintf(asmFile, "    mov byte ptr [bp-%d-%d], al  ; Initialize struct member %s\n", 
+                        fprintf(asmFile, "    mov byte [bp-%d-%d], al  ; Initialize struct member %s\n", 
                                 stackSize, memberOffset, member->name);
                     } else if (member->type_info.type == TYPE_LONG || 
                               member->type_info.type == TYPE_UNSIGNED_LONG) {
                         // Assume 32-bit value in dx:ax
-                        fprintf(asmFile, "    mov word ptr [bp-%d-%d], ax  ; Initialize struct member %s low word\n", 
+                        fprintf(asmFile, "    mov word [bp-%d-%d], ax  ; Initialize struct member %s low word\n", 
                                 stackSize, memberOffset, member->name);
-                        fprintf(asmFile, "    mov word ptr [bp-%d-%d], dx  ; Initialize struct member %s high word\n", 
+                        fprintf(asmFile, "    mov word [bp-%d-%d], dx  ; Initialize struct member %s high word\n", 
                                 stackSize, memberOffset + 2, member->name);
                     } else {
                         // Default case for 16-bit values
-                        fprintf(asmFile, "    mov word ptr [bp-%d-%d], ax  ; Initialize struct member %s\n", 
+                        fprintf(asmFile, "    mov word bp-%d-%d], ax  ; Initialize struct member %s\n", 
                                 stackSize, memberOffset, member->name);
                     }
                     
@@ -1803,9 +1817,9 @@ void generateAsmStmt(ASTNode* node) {
         if (isOutput[i]) {
             constraint++;
         }
-        
-        // Process input operands - generate code to load them
-        if (!isOutput[i]) {
+          // Process input operands - generate code to load them
+        // For "q" constraint, we'll handle the loading specially to avoid the mov al, al issue
+        if (!isOutput[i] && (*constraint != 'q')) {
             // Generate code to evaluate the operand
             generateExpression(node->asm_stmt.operands[i]);
         }
@@ -1845,8 +1859,7 @@ void generateAsmStmt(ASTNode* node) {
                     fprintf(asmFile, "    mov %s, ax ; Load word input operand %d into register\n", 
                             registers[i], i);
                 }
-            }
-        } else if (*constraint == 'q') {
+            }        } else if (*constraint == 'q') {
             // 'q' is a GCC constraint that means a,b,c,d registers (in any size)
             // In our case, we'll use it specifically for byte registers (al, bl, cl, dl)
             if (reg_index < 4) { // Only 4 byte registers available
@@ -1856,12 +1869,38 @@ void generateAsmStmt(ASTNode* node) {
                 registers[i] = strdup("al");
             }
             
-            // For input operands, move result to the assigned byte register
+            // For input operands, handle byte-sized parameters properly
             if (!isOutput[i]) {
-                // AL is the default result register's low byte
-                if (strcmp(registers[i], "al") != 0) {
-                    fprintf(asmFile, "    mov %s, al ; Load byte input operand %d into register ('q' constraint)\n", 
-                            registers[i], i);
+                // Check if this is a parameter or variable that we can directly access
+                if (node->asm_stmt.operands[i]->type == NODE_IDENTIFIER) {
+                    char* varName = node->asm_stmt.operands[i]->identifier;
+                    int offset = getVariableOffset(varName);
+                    
+                    if (isParameter(varName)) {
+                        // For parameters, load the byte directly into the byte register
+                        fprintf(asmFile, "    mov %s, byte [bp+%d] ; Load byte parameter directly\n", 
+                                registers[i], -offset);
+                    } else if (offset > 0) {
+                        // For local variables, load the byte directly into the byte register
+                        fprintf(asmFile, "    mov %s, byte [bp-%d] ; Load byte local variable directly\n", 
+                                registers[i], offset);
+                    } else {
+                        // For other variables (likely globals), use standard approach
+                        generateExpression(node->asm_stmt.operands[i]);
+                        // If the assigned register is not al, move from al to the assigned register
+                        if (strcmp(registers[i], "al") != 0) {
+                            fprintf(asmFile, "    mov %s, al ; Load byte input operand %d into register ('q' constraint)\n", 
+                                    registers[i], i);
+                        }
+                    }
+                } else {
+                    // For complex expressions, use the standard approach
+                    generateExpression(node->asm_stmt.operands[i]);
+                    // If the assigned register is not al, move from al to the assigned register
+                    if (strcmp(registers[i], "al") != 0) {
+                        fprintf(asmFile, "    mov %s, al ; Load byte input operand %d into register ('q' constraint)\n", 
+                                registers[i], i);
+                    }
                 }
             }
         } else {

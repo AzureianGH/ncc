@@ -1,8 +1,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <ctype.h>
 #include "error_manager.h"
 #include "preprocessor.h"
+#include "codegen.h"
 
 // Forward declarations from other files
 typedef struct ASTNode ASTNode;
@@ -25,6 +27,7 @@ void printUsage(const char* programName) {
     fprintf(stderr, "  -dl          Debug line tracking (show preprocessor line mappings)\n");
     fprintf(stderr, "  -I<path>     Add <path> to include search paths\n");
     fprintf(stderr, "  -disp <addr> Set origin displacement address\n");
+    fprintf(stderr, "  -O<level>    Set optimization level (0=none, 1=basic)\n");
     fprintf(stderr, "  -h           Display this help and exit\n");
 }
 
@@ -32,7 +35,9 @@ int main(int argc, char* argv[]) {
     char* sourceFile = NULL;
     char* outputFile = "output.asm";
     int debugMode = 0;
+    int debugLineMode = 0;
     unsigned int originAddress = 0;  // Default load address (no ORG)
+    int optimizationLevel = OPT_LEVEL_NONE;  // Default to no optimization
     
     // Parse command line arguments
     for (int i = 1; i < argc; i++) {
@@ -46,6 +51,14 @@ int main(int argc, char* argv[]) {
                 addIncludePath(argv[++i]);
             }
         }
+        // Handle optimization level flag
+        else if (strncmp(argv[i], "-O", 2) == 0) {
+            if (isdigit(argv[i][2])) {
+                optimizationLevel = argv[i][2] - '0';  // Convert char to int
+            } else if (i + 1 < argc && isdigit(argv[i+1][0])) {
+                optimizationLevel = argv[++i][0] - '0';
+            }
+        }
         // Handle origin displacement flag (hex or decimal)
         else if ((strcmp(argv[i], "-disp") == 0 || strcmp(argv[i], "-DISP") == 0) && i + 1 < argc) {
             // Parse number with auto-detect base (0x for hex)
@@ -54,6 +67,8 @@ int main(int argc, char* argv[]) {
             outputFile = argv[++i];
         } else if (strcmp(argv[i], "-d") == 0) {
             debugMode = 1;
+        } else if (strcmp(argv[i], "-dl") == 0) {
+            debugLineMode = 1;
         } else if (strcmp(argv[i], "-h") == 0) {
             printUsage(argv[0]);
             return 0;
@@ -120,6 +135,9 @@ int main(int argc, char* argv[]) {
     initLexer(sourceCode);
     initParser();
     initCodeGen(outputFile, originAddress);
+    
+    // Set optimization level
+    setOptimizationLevel(optimizationLevel);
     
     // Parse the source code into an AST
     ASTNode* ast = parseProgram();

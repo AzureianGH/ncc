@@ -5,8 +5,23 @@
 #include "string_literals.h"
 #include "error_manager.h"
 
+// Optimization levels
+#define OPT_LEVEL_NONE 0    // -O0: No optimization
+#define OPT_LEVEL_BASIC 1   // -O1: Basic optimizations (string merging)
+
+// Optimization state
+typedef struct {
+    int level;              // Current optimization level
+    int mergeStrings;       // Whether to merge identical strings
+} OptimizationState;
+
+extern OptimizationState optimizationState;
+
 // Initialize code generator with optional origin displacement
 void initCodeGen(const char* outputFilename, unsigned int orgAddress);
+
+// Set the optimization level
+void setOptimizationLevel(int level);
 
 // Get the current function name
 const char* getCurrentFunctionName();

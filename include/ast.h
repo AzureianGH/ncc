@@ -62,12 +62,14 @@ typedef enum {
     OP_BITWISE_OR,  // |
     OP_BITWISE_XOR, // ^
     OP_LEFT_SHIFT,  // <<
-    OP_RIGHT_SHIFT, // >>
+    OP_RIGHT_SHIFT, // >>    
     OP_PLUS_ASSIGN, // +=
     OP_MINUS_ASSIGN,// -=
     OP_MUL_ASSIGN,  // *=
     OP_DIV_ASSIGN,  // /=
     OP_MOD_ASSIGN,  // %=
+    OP_LEFT_SHIFT_ASSIGN,  // <<=
+    OP_RIGHT_SHIFT_ASSIGN, // >>=
     OP_DOT,         // . (struct member access)
     OP_ARROW,       // -> (struct member access through pointer)
     OP_COMMA        // , (comma operator)
