@@ -1,5 +1,5 @@
 CC = gcc
-CFLAGS = -std=c99 -Wall -Wextra -g -Wno-enum-conversion
+CFLAGS = -std=c99 -Wall -Wextra -g -Wno-enum-conversion -Wno-unused-but-set-variable -Wno-unused-function -Wno-unused-variable -Wno-unused-parameter
 QUIET_FLAG = -DQUIET_MODE
 INCLUDES = -Iinclude
 
@@ -30,38 +30,15 @@ quiet:
 	$(MAKE) clean
 	$(MAKE) CFLAGS="$(CFLAGS) $(QUIET_FLAG)"
 
-# Compile bootloader and kernel
-build_bootloader:
-	bin/ncc -disp 0x7C00 -Itest -O1 test/bootloader.c -o test/bootloader.asm
-	nasm -f bin test/bootloader.asm -o test/bootloader.bin
-
-build_kernel:
-	bin/ncc -disp 0x8000 -Itest -O1 test/kernel.c -o test/kernel.asm
-	nasm -f bin test/kernel.asm -o test/kernel.bin
-
 # Create floppy image using bootloader as MBR and kernel as second sector
-floppy: build_bootloader build_kernel
-	dd if=/dev/zero of=test/floppy.img bs=512 count=2880
-	dd if=test/bootloader.bin of=test/floppy.img conv=notrunc
-	dd if=test/kernel.bin of=test/floppy.img bs=512 seek=1 conv=notrunc
-	qemu-system-x86_64 -fda test/floppy.img -boot a -m 512
+test_os:
+	bin/ncc -disp 0x7C00 -I.\test .\test\bootloader.c -o .\test\bootloader.asm
+	nasm -f bin .\test\bootloader.asm -o .\test\bootloader.bin
+	bin/ncc -disp 0x8000 -I.\test .\test\kernel.c -o .\test\kernel.asm
+	nasm -f bin .\test\kernel.asm -o .\test\kernel.bin
+	dd if=/dev/zero of=test\floppy.img bs=512 count=2880
+	dd if=test\bootloader.bin of=test\floppy.img conv=notrunc
+	dd if=test\kernel.bin of=test\floppy.img bs=512 seek=1 conv=notrunc
+	qemu-system-x86_64 -fda test\floppy.img
 
-# Create ISO using bootloader as El Torito image, and kernel as a file on disk
-iso: build_bootloader build_kernel
-	mkdir -p iso_root/boot
-	cp test/bootloader.bin iso_root/boot/bootloader.bin
-	cp test/kernel.bin iso_root/boot/kernel.bin
-
-	dd if=test/bootloader.bin of=test/bootloader_512.bin bs=512 count=1 conv=notrunc
-
-	xor/xorriso.exe -as mkisofs \
-		-o test/floppy.iso \
-		-b boot/bootloader.bin \
-		-no-emul-boot \
-		-boot-load-size 4 \
-		-boot-info-table \
-		iso_root
-
-	qemu-system-x86_64 -cdrom test/floppy.iso -boot d -m 512
-
-.PHONY: all clean quiet build_bootloader build_kernel floppy iso
+.PHONY: all clean quiet build_bootloader build_kernel test_os

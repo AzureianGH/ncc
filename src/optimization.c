@@ -2,7 +2,7 @@
 #include <stdio.h>
 
 // Set the optimization level based on the provided level flag
-void setOptimizationLevel(int level) {
+void setOptimizationLevel(int level, int debugMode) {
     optimizationState.level = level;
     
     // Configure specific optimizations based on level
@@ -26,7 +26,7 @@ void setOptimizationLevel(int level) {
     
     // Print info about optimization if not in quiet mode
     #ifndef QUIET_MODE
-    printf("Compiler optimization level: O%d\n", optimizationState.level);
+    if (debugMode) printf("Compiler optimization level: O%d\n", optimizationState.level);
     if (optimizationState.mergeStrings) {
         printf("  - String merging: enabled\n");
     }

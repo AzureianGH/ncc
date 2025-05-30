@@ -20,8 +20,12 @@ extern OptimizationState optimizationState;
 // Initialize code generator with optional origin displacement
 void initCodeGen(const char* outputFilename, unsigned int orgAddress);
 
+// Initialize code generator with system mode (bootloader) settings
+void initCodeGenSystemMode(const char* outputFilename, unsigned int orgAddress, 
+                          int setStackSegmentPointer, unsigned int stackSegment, unsigned int stackPointer);
+
 // Set the optimization level
-void setOptimizationLevel(int level);
+void setOptimizationLevel(int level, int quietMode);
 
 // Get the current function name
 const char* getCurrentFunctionName();

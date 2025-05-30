@@ -169,13 +169,60 @@ void initCodeGen(const char* outputFilename, unsigned int orgAddr) {
     arrayMarkerFound = 0;
     redefineArrayStartIndex = 0;
     
-    // Initialize redefine locals flag
-    redefineLocalsFound = 0;
-    
-    // Initialize global marker
-    globalMarkerFound = 0;
-    
+    // Store origin address
     originAddress = orgAddr;
+    
+    // Write origin directive to ASM file
+    fprintf(asmFile, "org 0x%X\n\n", orgAddr);
+}
+
+// Initialize code generator for system mode (bootloader)
+void initCodeGenSystemMode(const char* outputFilename, unsigned int orgAddr,
+                          int setStackSegmentPointer, unsigned int stackSegment, unsigned int stackPointer) {
+    asmFile = fopen(outputFilename, "w");
+    if (!asmFile) {
+        fprintf(stderr, "Error: Could not open output file %s\n", outputFilename);
+        exit(1);
+    }
+    labelCounter = 0;
+    
+    // Initialize string tracking
+    stringLiteralCount = 0;
+    stringLiterals = NULL;
+    stringMarkerFound = 0;
+    redefineStringStartIndex = 0;
+      
+    // Initialize array tracking
+    arrayCount = 0;
+    arrayNames = NULL;
+    arraySizes = NULL;
+    arrayTypes = NULL;
+    arrayFunctions = NULL; // Track function names for arrays
+    arrayMarkerFound = 0;
+    redefineArrayStartIndex = 0;
+    
+    // Store origin address
+    originAddress = orgAddr;
+    
+    // Write origin directive to ASM file
+    fprintf(asmFile, "org 0x%X\n\n", orgAddr);
+    
+    // Generate bootloader initialization code
+    fprintf(asmFile, "; System mode initialization code\n");
+    fprintf(asmFile, "cli                      ; Disable interrupts\n");
+    fprintf(asmFile, "xor ax, ax               ; Clear AX register\n");
+    
+    if (setStackSegmentPointer) {
+        // Set up stack segment and pointer as specified
+        fprintf(asmFile, "mov ax, 0x%04X         ; Set CS to specified value\n", stackSegment);
+        fprintf(asmFile, "mov ss, ax             ; Set stack segment\n");
+        fprintf(asmFile, "xor ax, ax             ; Clear AX register\n");
+        fprintf(asmFile, "mov ax, 0x%04X         ; Set SP to specified value\n", stackPointer);
+        fprintf(asmFile, "mov sp, ax             ; Set stack pointer\n");
+    }
+    
+    fprintf(asmFile, "sti                      ; Re-enable interrupts\n");
+    fprintf(asmFile, "\n; Begin program code\n");
 }
 
 // Close code generator

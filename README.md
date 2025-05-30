@@ -1,132 +1,80 @@
-# NCC - A C Compiler Targeting the 8086 CPU with NASM Output
+# NCC (Nathan's C Compiler)
 
-NCC is a C compiler that targets the 8086 CPU and emits NASM assembly code, suitable for creating 16-bit DOS programs or flat binaries.
+A lightweight C compiler targeting 8086/DOS systems, designed for simplicity, educational purposes, and retro computing.
+
+## Overview
+
+NCC is a compact C compiler that translates a significant subset of the C language into x86 assembly for 16-bit DOS environments. It's ideal for:
+
+- Retro computing projects
+- DOS development
+- Bootloader and small OS development
+- Learning compiler design and implementation
+- Embedded systems with limited resources
 
 ## Features
 
-- Targets Intel 8086 CPU architecture
-- Generates NASM assembly code
-- Supports the following data types:
-  - `int` (16-bit signed integer)
-  - `short` (16-bit signed integer, alias of int)
-  - `unsigned int` (16-bit unsigned integer)
-  - `unsigned short` (16-bit unsigned integer, alias of unsigned int)
-  - `char` (8-bit signed integer)
-  - `unsigned char` (8-bit unsigned integer)
-- Special features:
-  - `FAR` keyword for far pointers (segment:offset)
-  - Inline assembly with `__asm` blocks
-  - `stackframe` attribute for function stack management
+- **Simplified C Subset**: Implements essential C language features
+- **8086 Assembly Output**: Generates code for 16-bit x86 processors
+- **Struct Support**: Full implementation of C structures
+- **Small Memory Footprint**: Designed for resource-constrained environments
+- **Fast Compilation**: Streamlined compilation process
+- **Readable Assembly Output**: Generated assembly is human-readable and well-commented
+- **DOS/8086 Targeting**: Perfect for vintage computing or embedded projects
 
-## Building the Compiler
+## Getting Started
+
+### Building the Compiler
 
 ```bash
 make
 ```
 
-This will create the `ncc` executable in the `bin` directory.
-
-## Using the Compiler
+### Basic Usage
 
 ```bash
-./bin/ncc [options] <source-file>
+./bin/ncc myprogram.c -o myprogram.asm
 ```
 
-### Options
+### Creating Executables
 
-- `-o <file>` : Specify output assembly file (default: output.asm)
-- `-d` : Debug mode (print AST)
-- `-h` : Display help and exit
-
-## Example
-
-```c
-// Sample program
-int main() {
-    int x = 10;
-    int y = 20;
-    int z = x + y;
-    return z;
-}
-```
-
-Compile with:
+After compiling to assembly, use an assembler like NASM to create executable binaries:
 
 ```bash
-./bin/ncc test/sample.c -o test/sample.asm
+nasm -f bin myprogram.asm -o myprogram.com
 ```
 
-Then assemble with NASM:
+### Creating Operating Systems
+
+You can make bootloaders and full 16 bit OSes, noting you set up stack and such.
 
 ```bash
-nasm -f bin test/sample.asm -o sample.com
+ncc -disp 0x7C00 myos.c -o myos.asm
+nasm -f bin myos.asm -o myprogram.bin
 ```
 
-## Special Features
+## Documentation
 
-### Far Pointers
+For detailed information about the compiler's architecture, implementation details, and how to extend or modify it, see [DOCUMENTATION.md](DOCUMENTATION.md).
 
-```c
-// Far pointer declaration (segment:offset)
-int*^ screen = 0xB800:0000;
+## Examples
 
-// Regular pointer
-int* ptr = &x;
+The `test/` directory contains various example programs demonstrating the compiler's capabilities, including:
 
-// Function taking a far pointer
-void writeScreen(int*^ buffer, int value);
-```
-
-### Inline Assembly
-
-```c
-void interruptExample() {
-    __asm {
-        mov ah, 0x4C
-        int 0x21
-    };
-}
-```
-
-### Stackframe Attribute
-
-The `stackframe` attribute automatically sets up and tears down a function's stack frame.
-
-```c
-stackframe int factorial(int n) {
-    if (n <= 1)
-        return 1;
-    else
-        return n * factorial(n - 1);
-}
-```
-
-This is equivalent to:
-
-```c
-int factorial(int n) {
-    // Automatically inserted by compiler:
-    // push bp
-    // mov bp, sp
-
-    if (n <= 1)
-        return 1;
-    else
-        return n * factorial(n - 1);
-
-    // Automatically inserted by compiler:
-    // mov sp, bp
-    // pop bp
-    // ret
-}
-```
-
-## Limitations
-
-- No support for floating-point types
-- Limited optimizations
-- Limited standard library
+- Basic control structures
+- Function definitions and calls
+- Struct usage
+- Array manipulation
+- Simple bootloader examples
 
 ## License
 
-This software is provided as-is with no warranty.
+MIT License is used.
+
+## Contributing
+
+Contributions, bug reports, and feature requests are welcome! Feel free to submit pull requests or open issues on GitHub.
+
+### Third-Party Tools
+
+This project includes NASM (Netwide Assembler), which is distributed under the 2-Clause BSD License. See `LICENSE.nasm.txt` for details.
