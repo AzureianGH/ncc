@@ -15,16 +15,8 @@ void _after_diskload() {
     writeLog("Installing INTs...\r\n", 2);
     installIRQS();
     initPIT();
-    writeLog("Size of bootloader: ", 2);
-    uint16_t size = sizeOfKernel();
-    writeDebug(stoa_hex(size));
-    writeDebug(" bytes\r\n");    while (true)
-    {
-        writeDebug("Time since boot: ");
-        writeDebug(stoa_dec(seconds));
-        writeChar('\r');  // Just a carriage return to overwrite the line
-        __asm("hlt");
-    }
+    writeLog("PIT initialized.\r\n", 0);
+    
     
     haltForever();
 }
@@ -38,6 +30,7 @@ void clearScreen()
 [[deprecated("This function will be removed soon."), naked]]
 void haltForever()
 {
+    writeLog("Halt forever called.\r\n", 0);
     __asm("cli");           // Disable interrupts
     __asm("hlt");           // Halt CPU
     __asm("jmp _haltForever"); // Infinite loop

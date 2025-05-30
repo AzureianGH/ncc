@@ -33,6 +33,10 @@ make
 
 # To create an executable, use an assembler like NASM
 nasm -f bin yourprogram.asm -o yourprogram.com
+
+# To create a bootloader
+./bin/ncc -sys yourbootloader.c -o yourbootloader.asm
+nasm -f bin yourbootloader.asm -o yourbootloader.bin
 ```
 
 ## Compiler Architecture
@@ -65,6 +69,16 @@ The code generator (`codegen.c` and related files) translates the AST into 8086 
 - Stack frame setup
 - Function calls
 - Efficient code patterns for common operations
+- Bootloader initialization for system mode
+
+#### System Mode (Bootloader) Support
+
+For bootloader development, NCC provides specialized code generation via `initCodeGenSystemMode()` that:
+
+- Sets the origin address to 0x7C00 (standard BIOS boot sector location)
+- Optionally configures the stack segment and stack pointer
+- Generates proper bootloader initialization code
+- Handles entry point setup for BIOS loading
 
 ## Extending the Compiler
 

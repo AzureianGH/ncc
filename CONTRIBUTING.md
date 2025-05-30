@@ -166,6 +166,7 @@ When reporting bugs, please include:
 
 Discord: `azureian`
 Email: `alexmybestcat@gmail.com`
+GitHub: [AzureianGH](https://github.com/AzureianGH)
 
 ## Thank You
 

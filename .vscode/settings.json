@@ -20,7 +20,8 @@
         "limits": "c",
         "stdarg.h": "c",
         "color.h": "c",
-        "preprocessor.h": "c"
+        "preprocessor.h": "c",
+        "direct.h": "c"
     },
     "makefile.configureOnOpen": false
 }

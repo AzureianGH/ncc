@@ -1,6 +1,15 @@
 # NCC User Guide
 
-This guide provides instructions for using NCC to compile C programs for 8086/DOS environments.
+This gu- `-o <file>`: Specify output file (default: input.asm)
+- `-I <path>`: Add include path
+- `-D <n>[=value]`: Define preprocessor macro
+- `-v`: Verbose mode (shows compilation details)
+- `-h` or `--help`: Display help information
+- `-disp <addr>`: Set custom origin address for the output code
+- `-com`: Target MS-DOS executable (sets origin to 0x100)
+- `-sys`: Target bootloader (sets origin to 0x7C00 for BIOS bootloaders)
+- `-ss SS:SP`: Set stack segment and pointer (format: XXXX:XXXX in hexadecimal)
+- `-S`: Stop after generating assembly (don't assemble)rovides instructions for using NCC to compile C programs for 8086/DOS environments.
 
 ## Installation
 
@@ -190,6 +199,55 @@ If you encounter issues:
 5. Submit an issue on GitHub with a minimal example
 
 ## Advanced Features
+
+### Bootloader Development
+
+NCC provides specialized options for bootloader development:
+
+```c
+/* bootloader.c */
+int main() {
+    // Access video memory directly
+    char* videoMem = (char*)0xB8000;
+    
+    // Write "Hello, Boot!" to the screen
+    char* message = "Hello, Boot!";
+    int i = 0;
+    while(message[i] != '\0') {
+        videoMem[i*2] = message[i];    // Character
+        videoMem[i*2+1] = 0x07;        // Light gray on black
+        i++;
+    }
+    
+    // Infinite loop to prevent bootloader from exiting
+    while(1) {}
+    
+    return 0;
+}
+```
+
+Compile using bootloader mode:
+
+```bash
+# Compile with system mode (-sys) to target 0x7C00
+ncc -sys bootloader.c -o bootloader.asm
+
+# Optionally set custom stack setup
+ncc -sys -ss 0000:7C00 bootloader.c -o bootloader.asm
+
+# Assemble to binary
+nasm -f bin bootloader.asm -o bootloader.bin
+
+# Create a bootable floppy image
+dd if=/dev/zero of=floppy.img bs=512 count=2880
+dd if=bootloader.bin of=floppy.img conv=notrunc
+```
+
+The `-sys` option automatically:
+1. Sets the origin address to 0x7C00 (standard BIOS boot address)
+2. Handles proper bootloader initialization
+
+The `-ss` option allows you to specify stack segment and pointer values in the format SS:SP (hexadecimal).
 
 ### Inline Assembly
 

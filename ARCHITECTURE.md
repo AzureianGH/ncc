@@ -92,6 +92,24 @@ typedef struct ASTNode {
 
 Each node type has specific fields in the union for its unique data.
 
+### System Mode (Bootloader) Support
+
+The system mode, enabled with the `-sys` option, is implemented in `codegen.c` through:
+
+```c
+void initCodeGenSystemMode(const char* outputFilename, unsigned int orgAddress, 
+                          int setStackSegmentPointer, unsigned int stackSegment, 
+                          unsigned int stackPointer);
+```
+
+This specialized initialization:
+1. Sets up the bootloader at the standard origin address (0x7C00)
+2. Optionally configures stack segment and pointer values
+3. Generates bootloader-specific initialization code
+4. Creates proper entry point for BIOS loading
+
+System mode allows for easier bootloader development without manually handling hardware initialization details.
+
 ### Type Information
 
 Type information is stored in the `TypeInfo` structure:

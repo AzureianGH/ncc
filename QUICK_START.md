@@ -148,6 +148,43 @@ int main() {
 }
 ```
 
+### Example: Bootloader
+
+```c
+// bootloader.c
+int main() {
+    // Write a simple message at the top of the screen
+    char* video = (char*)0xB8000;
+    char* msg = "NCC Bootloader";
+    
+    for(int i = 0; msg[i] != 0; i++) {
+        video[i*2] = msg[i];
+        video[i*2+1] = 0x07; // Light gray on black
+    }
+    
+    // Halt
+    while(1) {}
+    return 0;
+}
+```
+
+Compile and create a bootable disk:
+
+```bash
+# Compile with system mode (sets origin to 0x7C00)
+./bin/ncc -sys bootloader.c -o bootloader.asm
+
+# Optional: Set custom stack
+./bin/ncc -sys -ss 0000:7C00 bootloader.c -o bootloader.asm
+
+# Assemble to binary
+nasm -f bin bootloader.asm -o bootloader.bin
+
+# Create a bootable floppy image (if needed)
+dd if=/dev/zero of=floppy.img bs=512 count=2880
+dd if=bootloader.bin of=floppy.img conv=notrunc
+```
+
 ## Common Issues and Solutions
 
 ### Program Crashes

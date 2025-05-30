@@ -2,8 +2,21 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <direct.h>
-#include <windows.h>
+
+// Platform-specific includes
+#ifdef _WIN32
+    #include <direct.h>
+    #include <windows.h>
+    #define PATH_SEPARATOR '\\'
+    #define MAX_PATH_LEN MAX_PATH
+#else
+    #include <unistd.h>
+    #include <libgen.h>
+    #include <limits.h>
+    #define PATH_SEPARATOR '/'
+    #define MAX_PATH_LEN PATH_MAX
+#endif
+
 #include "error_manager.h"
 #include "preprocessor.h"
 #include "codegen.h"
@@ -35,17 +48,35 @@ void printUsage(const char* programName) {
     fprintf(stderr, "  -com         Target MS-DOS executable (ORG 0x100)\n");
     fprintf(stderr, "  -sys         Target bootloader (ORG 0x7C00)\n");
     fprintf(stderr, "  -ss SS:SP    Set stack segment and pointer (for bootloaders)\n");
+#ifndef NO_NASM
     fprintf(stderr, "  -S           Stop after generating assembly (don't assemble)\n");
+#endif
     fprintf(stderr, "  -h           Display this help and exit\n");
 }
 
+#ifndef NO_NASM
 char* getExecutableDir() {
-    static char buffer[MAX_PATH];
-    GetModuleFileName(NULL, buffer, MAX_PATH);
-    char* lastSlash = strrchr(buffer, '\\');
-    if (lastSlash) *lastSlash = '\0';
+    static char buffer[MAX_PATH_LEN];
+    
+#ifdef _WIN32
+    GetModuleFileName(NULL, buffer, MAX_PATH_LEN);
+    char* lastSeparator = strrchr(buffer, PATH_SEPARATOR);
+#else
+    ssize_t len = readlink("/proc/self/exe", buffer, MAX_PATH_LEN - 1);
+    if (len != -1) {
+        buffer[len] = '\0';
+    } else {
+        // Fallback if /proc/self/exe doesn't exist
+        strcpy(buffer, ".");
+        return buffer;
+    }
+    char* lastSeparator = strrchr(buffer, PATH_SEPARATOR);
+#endif
+    
+    if (lastSeparator) *lastSeparator = '\0';
     return buffer;
 }
+#endif
 
 int main(int argc, char* argv[]) {
     char* sourceFile = NULL;
@@ -54,7 +85,9 @@ int main(int argc, char* argv[]) {
     int debugLineMode = 0;
     unsigned int originAddress = 0;
     int optimizationLevel = OPT_LEVEL_NONE;
+#ifndef NO_NASM
     int stopAfterAsm = 0;
+#endif
     int systemMode = 0;  // Flag for bootloader mode
     int setStackSegmentPointer = 0;
     unsigned int stackSegment = 0;
@@ -97,8 +130,10 @@ int main(int argc, char* argv[]) {
             debugMode = 1;
         } else if (strcmp(argv[i], "-dl") == 0) {
             debugLineMode = 1;
+#ifndef NO_NASM
         } else if (strcmp(argv[i], "-S") == 0) {
             stopAfterAsm = 1;
+#endif
         } else if (strcmp(argv[i], "-h") == 0) {
             printUsage(argv[0]);
             return 0;
@@ -155,8 +190,12 @@ int main(int argc, char* argv[]) {
     initLexer(sourceCode);
     initParser();
 
+#ifndef NO_NASM
     // Use temp.asm if we're going to assemble
     const char* asmFile = stopAfterAsm ? outputFile : "temp.asm";
+#else
+    const char* asmFile = outputFile;
+#endif
     
     // Initialize code generator based on mode
     if (systemMode) {
@@ -181,13 +220,21 @@ int main(int argc, char* argv[]) {
     cleanupPreprocessor();
     free(sourceCode);
 
+#ifndef NO_NASM
     // Assemble if not stopping after ASM
     if (!stopAfterAsm) {
         char command[1024];
         char* exeDir = getExecutableDir();
+        
+#ifdef _WIN32
         snprintf(command, sizeof(command),
-            "cmd /C \"\"%s\\tooling\\nasm\\nasm.exe\" -f bin temp.asm -o \"%s\"\"",
-            exeDir, outputFile);
+            "cmd /C \"\"%s%ctooling%cnasm%cnasm.exe\" -f bin temp.asm -o \"%s\"\"",
+            exeDir, PATH_SEPARATOR, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
+#else
+        snprintf(command, sizeof(command),
+            "nasm -f bin temp.asm -o \"%s\"",
+            outputFile);
+#endif
 
         int result = system(command);
         if (result != 0) {
@@ -196,6 +243,7 @@ int main(int argc, char* argv[]) {
         }
         remove("temp.asm");
     }
+#endif
 
     if (debugMode) printf("Compilation successful. Output written to %s\n", outputFile);
     return 0;

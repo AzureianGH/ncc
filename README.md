@@ -44,12 +44,21 @@ After compiling to assembly, use an assembler like NASM to create executable bin
 nasm -f bin myprogram.asm -o myprogram.com
 ```
 
-### Creating Operating Systems
+### Creating Operating Systems and Bootloaders
 
-You can make bootloaders and full 16 bit OSes, noting you set up stack and such.
+You can make bootloaders and full 16-bit OSes with specialized options:
 
 ```bash
+# Using displacement address (manual approach)
 ncc -disp 0x7C00 myos.c -o myos.asm
+
+# Using bootloader mode (recommended approach)
+ncc -sys myos.c -o myos.asm
+
+# Using bootloader mode with custom stack setup
+ncc -sys -ss 0000:7C00 myos.c -o myos.asm
+
+# Assemble the bootloader
 nasm -f bin myos.asm -o myprogram.bin
 ```
 
