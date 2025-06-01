@@ -29,8 +29,7 @@ make
 
 ```bash
 # Run a simple test
-./bin/ncc test/simple.c -o test.asm
-nasm -f bin test.asm -o test.com
+./bin/ncc -com test/simple.c -o test.com
 ```
 
 ### Code Organization

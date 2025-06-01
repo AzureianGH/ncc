@@ -21,6 +21,8 @@ NCC is a compact C compiler that translates a significant subset of the C langua
 - **Fast Compilation**: Streamlined compilation process
 - **Readable Assembly Output**: Generated assembly is human-readable and well-commented
 - **DOS/8086 Targeting**: Perfect for vintage computing or embedded projects
+- **Preprocessor Support**: Includes basic preprocessor directives with proper binary operator handling
+- **Global Array Support**: Improved array reference generation for global arrays
 
 ## Getting Started
 
@@ -50,31 +52,28 @@ You can make bootloaders and full 16-bit OSes with specialized options:
 
 ```bash
 # Using displacement address (manual approach)
-ncc -disp 0x7C00 myos.c -o myos.asm
+ncc -disp 0x7C00 myos.c -o myos.bin
 
 # Using bootloader mode (recommended approach)
-ncc -sys myos.c -o myos.asm
+ncc -sys myos.c -o myos.bin
 
 # Using bootloader mode with custom stack setup
-ncc -sys -ss 0000:7C00 myos.c -o myos.asm
-
-# Assemble the bootloader
-nasm -f bin myos.asm -o myprogram.bin
+ncc -sys -ss 0000:7C00 myos.c -o myos.bin
 ```
-
-## Documentation
-
-For detailed information about the compiler's architecture, implementation details, and how to extend or modify it, see [DOCUMENTATION.md](DOCUMENTATION.md).
 
 ## Examples
 
 The `test/` directory contains various example programs demonstrating the compiler's capabilities, including:
 
-- Basic control structures
-- Function definitions and calls
-- Struct usage
-- Array manipulation
+- Simple COM executables
 - Simple bootloader examples
+
+## Recent Improvements
+
+- Fixed preprocessor warnings related to binary operators
+- Improved global array references in generated code
+- Enhanced array label generation in string_literals.c
+- Fixed identifier references to arrays in codegen.c
 
 ## License
 
