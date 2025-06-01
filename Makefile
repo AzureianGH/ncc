@@ -24,7 +24,7 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 clean:
-	rm -rf $(OBJ_DIR)/* $(BIN_DIR)/* test/*.bin test/*.asm test/floppy.img test/floppy.iso iso_root
+	rm -rf $(OBJ_DIR)/* $(BIN_DIR)/ncc.exe test/*.bin test/*.asm test/floppy.img test/floppy.iso iso_root
 
 quiet:
 	$(MAKE) clean
