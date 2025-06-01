@@ -113,7 +113,7 @@ int addLocalVariable(const char* name, int size) {
     int allocationSize = size == 4 ? 4 : 2; // Allocate 4 bytes for long types, 2 bytes for others
     
     stackSize += allocationSize;
-    localVars[localVarCount].name = strdup(name);
+    localVars[localVarCount].name = strdupc(name);
     localVars[localVarCount].offset = stackSize;
     localVarCount++;
     
@@ -440,7 +440,7 @@ void generateFunction(ASTNode* node) {
     if (node->function.info.is_static) {
         // Get sanitized filename for prefix
         const char* filename = getCurrentSourceFilename();
-        char* prefix = strdup(filename);
+        char* prefix = strdupc(filename);
         
         // Remove extension and sanitize for label use
         char* dot = strrchr(prefix, '.');
@@ -488,7 +488,7 @@ void generateFunction(ASTNode* node) {
         // Parameters are accessed via positive offsets from bp
         if (param->type == NODE_DECLARATION) {
             // Store parameters in reverse order for easier access
-            localVars[localVarCount].name = strdup(param->declaration.var_name);
+            localVars[localVarCount].name = strdupc(param->declaration.var_name);
             localVars[localVarCount].offset = -paramOffset; // Negative offset means it's a parameter
             localVarCount++;
               // Parameters always take 2 bytes on the stack in 16-bit mode
@@ -1205,8 +1205,7 @@ void generateExpression(ASTNode* node) {
                         strcpy(prefix, filename);
                         char* dot = strrchr(prefix, '.'); if (dot) *dot = '\0';
                         for (char* c = prefix; *c; c++) if (!isalnum(*c) && *c != '_') *c = '_';
-                    }
-                    // Determine if this global is an array
+                    }                    // Determine if this global is an array
                     TypeInfo* tinfo = getTypeInfo(node->identifier);
                     if (tinfo && tinfo->is_array) {
                         extern int arrayCount; extern char** arrayNames; extern char** arrayFunctions;
@@ -1215,9 +1214,8 @@ void generateExpression(ASTNode* node) {
                             if (strcmp(arrayNames[ai], node->identifier) == 0 && strcmp(arrayFunctions[ai], "global") == 0) {
                                 idx = ai; break;
                             }
-                        }
-                        if (idx >= 0 && prefix) {
-                            fprintf(asmFile, "    mov ax, _%s_%s_%d ; Address of global array\n", prefix, node->identifier, idx);
+                        }                        if (idx >= 0 && prefix) {
+                            fprintf(asmFile, "    mov ax, _%s_global_%s_%d ; Address of global array\n", prefix, node->identifier, idx);
                             free(prefix);
                             break;
                         }
@@ -1889,10 +1887,10 @@ void generateAsmStmt(ASTNode* node) {
             if (is_byte_register) {
                 // Byte register constraint ("rb")
                 if (reg_index < 4) { // Only 4 byte registers available
-                    registers[i] = strdup(byte_reg_choices[reg_index++]);
+                    registers[i] = strdupc(byte_reg_choices[reg_index++]);
                 } else {
                     // Fall back to al if we run out of preferred registers
-                    registers[i] = strdup("al");
+                    registers[i] = strdupc("al");
                 }
                 
                 // For input operands, move result to the assigned byte register
@@ -1906,10 +1904,10 @@ void generateAsmStmt(ASTNode* node) {
             } else {
                 // Standard word register constraint ("r")
                 if (reg_index < 6) {
-                    registers[i] = strdup(word_reg_choices[reg_index++]);
+                    registers[i] = strdupc(word_reg_choices[reg_index++]);
                 } else {
                     // Run out of preferred registers, just use ax
-                    registers[i] = strdup("ax");
+                    registers[i] = strdupc("ax");
                 }
                 
                 // For input operands, move result to the assigned register
@@ -1921,10 +1919,10 @@ void generateAsmStmt(ASTNode* node) {
             // 'q' is a GCC constraint that means a,b,c,d registers (in any size)
             // In our case, we'll use it specifically for byte registers (al, bl, cl, dl)
             if (reg_index < 4) { // Only 4 byte registers available
-                registers[i] = strdup(byte_reg_choices[reg_index++]);
+                registers[i] = strdupc(byte_reg_choices[reg_index++]);
             } else {
                 // Fall back to al if we run out of preferred registers
-                registers[i] = strdup("al");
+                registers[i] = strdupc("al");
             }
             
             // For input operands, handle byte-sized parameters properly
@@ -1963,12 +1961,12 @@ void generateAsmStmt(ASTNode* node) {
             }
         } else {
             // Default to ax for unknown constraints
-            registers[i] = strdup("ax");
+            registers[i] = strdupc("ax");
         }
     }
     
     // Now process the assembly code string, replacing %0, %1, etc.
-    char* asmCode = strdup(node->asm_stmt.code);
+    char* asmCode = strdupc(node->asm_stmt.code);
     char* result = (char*)malloc(strlen(asmCode) * 2); // Allocate double space for substitutions
     if (!result) {
         fprintf(stderr, "Memory allocation failed for assembly code processing\n");

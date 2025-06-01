@@ -3,6 +3,7 @@
 #include "lexer.h"
 #include "struct_support.h"
 #include "error_manager.h"
+#include "ast.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,7 +29,7 @@ TypeInfo parseStructType() {
         exit(1);
     }
     
-    char* structName = strdup(getCurrentToken().value);
+    char* structName = strdupc(getCurrentToken().value);
     consume(TOKEN_IDENTIFIER);
     
     // Find the struct definition by name
@@ -70,7 +71,7 @@ ASTNode* parseStructDefinition() {
         exit(1);
     }
     
-    node->struct_def.struct_name = strdup(getCurrentToken().value);
+    node->struct_def.struct_name = strdupc(getCurrentToken().value);
     consume(TOKEN_IDENTIFIER);
     
     // Check for duplicate struct definition
@@ -85,7 +86,7 @@ ASTNode* parseStructDefinition() {
         reportError(-1, "Memory allocation failed for struct info");
         exit(1);
     }
-    structInfo->name = strdup(node->struct_def.struct_name);
+    structInfo->name = strdupc(node->struct_def.struct_name);
     structInfo->members = NULL;
     structInfo->size = 0;
     
@@ -110,7 +111,7 @@ ASTNode* parseStructDefinition() {
             exit(1);
         }
         
-        char* memberName = strdup(getCurrentToken().value);
+        char* memberName = strdupc(getCurrentToken().value);
         consume(TOKEN_IDENTIFIER);
         
         // Check for array declaration
@@ -143,7 +144,7 @@ ASTNode* parseStructDefinition() {
         
         // Create AST node for member declaration
         ASTNode* memberNode = createNode(NODE_DECLARATION);
-        memberNode->declaration.var_name = strdup(memberName);
+        memberNode->declaration.var_name = strdupc(memberName);
         memberNode->declaration.type_info = memberTypeInfo;
         
         // Add to member list in AST

@@ -1,5 +1,6 @@
 #include "struct_support.h"
 #include "error_manager.h"
+#include "ast.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -44,7 +45,7 @@ StructMember* createStructMember(const char* name, TypeInfo typeInfo, int offset
         exit(1);
     }
     
-    member->name = strdup(name);
+    member->name = strdupc(name);
     member->type_info = typeInfo;
     member->offset = offset;
     member->next = NULL;

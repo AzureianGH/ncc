@@ -24,7 +24,7 @@ $(OBJ_DIR)/%.o: $(SRC_DIR)/%.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $< -o $@
 
 clean:
-	rm -rf $(OBJ_DIR)/* $(BIN_DIR)/ncc.exe test/*.bin test/*.asm test/floppy.img test/floppy.iso iso_root
+	rm -rf $(OBJ_DIR)/* $(BIN_DIR)/ncc.exe $(BIN_DIR)/ncc test/*.bin test/*.asm test/floppy.img test/floppy.iso iso_root
 
 quiet:
 	$(MAKE) clean
@@ -32,12 +32,12 @@ quiet:
 
 # Create floppy image using bootloader as MBR and kernel as second sector
 test_os:
-	bin/ncc -sys -ss 0x9000:0xFFFE -I.\test .\test\bootloader.c -o .\test\bootloader.bin
-	bin/ncc -disp 0x8000 -I.\test .\test\kernel.c -o .\test\kernel.bin
-	dd if=/dev/zero of=test\floppy.img bs=512 count=2880
-	dd if=test\bootloader.bin of=test\floppy.img conv=notrunc
-	dd if=test\kernel.bin of=test\floppy.img bs=512 seek=1 conv=notrunc
-	qemu-system-x86_64 -fda test\floppy.img
+	bin/ncc -sys -ss 0x9000:0xFFFE -I./test ./test/bootloader.c -o ./test/bootloader.bin
+	bin/ncc -disp 0x8000 -I./test ./test/kernel.c -o ./test/kernel.bin
+	dd if=/dev/zero of=test/floppy.img bs=512 count=2880
+	dd if=test/bootloader.bin of=test/floppy.img conv=notrunc
+	dd if=test/kernel.bin of=test/floppy.img bs=512 seek=1 conv=notrunc
+	qemu-system-x86_64 -fda test/floppy.img
 
 test_com:
 	bin/ncc -com .\test\testcom.c -o .\test\test.com

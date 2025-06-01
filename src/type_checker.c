@@ -23,7 +23,7 @@ void addTypeSymbol(const char* name, TypeInfo type) {
         return;
     }
     
-    symbols[symbolCount].name = strdup(name);
+    symbols[symbolCount].name = strdupc(name);
     symbols[symbolCount].type = type;
     symbolCount++;
 }

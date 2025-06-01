@@ -45,7 +45,7 @@ static int globalExists(const char* name) {
     // Add new entry
     entry = (GlobalEntry*)malloc(sizeof(GlobalEntry));
     if (entry) {
-        entry->name = strdup(name);
+        entry->name = strdupc(name);
         entry->next = globalHashTable[hash];
         globalHashTable[hash] = entry;
     }
@@ -104,7 +104,7 @@ void generateGlobalsAtMarker(FILE* asmFile) {
     
     // Get sanitized filename prefix
     char* prefix = getSanitizedFilenamePrefix();
-    if (!prefix) prefix = strdup("unknown");
+    if (!prefix) prefix = strdupc("unknown");
     
     // First, build the hash table of existing globals if redefining
     if (redefineLocalsFound && redefineGlobalStartIndex > 0) {

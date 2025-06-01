@@ -1,20 +1,25 @@
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <ctype.h>
 
 // Platform-specific includes
 #ifdef _WIN32
     #include <direct.h>
     #include <windows.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <ctype.h>
     #define PATH_SEPARATOR '\\'
     #define MAX_PATH_LEN MAX_PATH
 #else
+#define _POSIX_C_SOURCE 200809L
     #include <unistd.h>
     #include <libgen.h>
     #include <limits.h>
+    #include <stdio.h>
+    #include <stdlib.h>
+    #include <string.h>
+    #include <ctype.h>
     #define PATH_SEPARATOR '/'
-    #define MAX_PATH_LEN PATH_MAX
+    #define MAX_PATH_LEN 255
 #endif
 
 #include "error_manager.h"
@@ -137,7 +142,24 @@ int main(int argc, char* argv[]) {
         } else if (strcmp(argv[i], "-h") == 0) {
             printUsage(argv[0]);
             return 0;
-        } else if (argv[i][0] == '-') {
+        } else if (strcmp(argv[i], "--help") == 0) {
+            printUsage(argv[0]);
+            return 0;
+        } else if (strcmp(argv[i], "--version") == 0) {
+            #ifdef _WIN32
+            printf("ncc [ncc-win-x64] ntos(6.2025.1.0) - 1.00\n");
+            printf("Copyright (C) 2025 Nathan's Compiler Collection\n");
+            printf("This is free software; see the source for copying conditions.  There is NO\n");
+            printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
+            #else
+            printf("ncc [ncc-linux-x64] any-linux(6.2025.1.0) - 1.00\n");
+            printf("Copyright (C) 2025 Nathan's Compiler Collection\n");
+            printf("This is free software; see the source for copying conditions.  There is NO\n");
+            printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\r");
+            #endif
+            return 0;
+        } 
+        else if (argv[i][0] == '-') {
             fprintf(stderr, "Unknown option: %s\n", argv[i]);
             printUsage(argv[0]);
             return 1;
@@ -232,8 +254,8 @@ int main(int argc, char* argv[]) {
             exeDir, PATH_SEPARATOR, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
 #else
         snprintf(command, sizeof(command),
-            "nasm -f bin temp.asm -o \"%s\"",
-            outputFile);
+                    "\"%s%ctooling%cnasm%cnasm\" -f bin temp.asm -o \"%s\"",
+                    exeDir, PATH_SEPARATOR, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
 #endif
 
         int result = system(command);

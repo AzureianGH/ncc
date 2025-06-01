@@ -1,5 +1,6 @@
 #include "lexer.h"
 #include "error_manager.h"
+#include "ast.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -572,7 +573,7 @@ int consume(TokenType type) {
 // Consume the current token and return its value
 char* consumeAndGetValue(TokenType type) {
     if (tokenIs(type)) {
-        char* value = currentToken.value ? strdup(currentToken.value) : NULL;
+        char* value = currentToken.value ? strdupc(currentToken.value) : NULL;
         currentToken = getNextToken();
         return value;
     }

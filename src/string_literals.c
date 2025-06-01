@@ -88,7 +88,7 @@ int addStringLiteral(const char* str) {
     }
     
     // Make a copy of the string to work with
-    char* workStr = strdup(str);
+    char* workStr = strdupc(str);
     if (!workStr) {
         fprintf(stderr, "Debug: Failed to allocate memory for string copy\n");
         return -1;
@@ -189,12 +189,12 @@ int addArrayDeclaration(const char* name, int size, DataType type, const char* f
     }
     
     // Store array info
-    arrayNames[arrayCount] = strdup(name);
+    arrayNames[arrayCount] = strdupc(name);
     if (!arrayNames[arrayCount]) {
         fprintf(stderr, "Debug: Failed to allocate memory for array name\n");
         return -1;
     }
-    arrayFunctions[arrayCount] = funcName ? strdup(funcName) : strdup("global");
+    arrayFunctions[arrayCount] = funcName ? strdupc(funcName) : strdupc("global");
     if (!arrayFunctions[arrayCount]) {
         fprintf(stderr, "Debug: Failed to allocate memory for array function name\n");
         free(arrayNames[arrayCount]);
@@ -276,7 +276,7 @@ static int getStringIndex(const char* str, int newIndex) {
         unsigned int hash = hashString(str);
         StringEntry* entry = (StringEntry*)malloc(sizeof(StringEntry));
         if (entry) {
-            entry->string = strdup(str);
+            entry->string = strdupc(str);
             entry->index = newIndex;
             entry->next = stringHashTable[hash];
             stringHashTable[hash] = entry;
@@ -299,7 +299,7 @@ static int getStringIndex(const char* str, int newIndex) {
     // Add new entry
     entry = (StringEntry*)malloc(sizeof(StringEntry));
     if (entry) {
-        entry->string = strdup(str);
+        entry->string = strdupc(str);
         entry->index = newIndex;
         entry->next = stringHashTable[hash];
         stringHashTable[hash] = entry;
@@ -341,7 +341,7 @@ static int stringLabelExists(const char* label) {
     // Add new entry
     entry = (StringLabelEntry*)malloc(sizeof(StringLabelEntry));
     if (entry) {
-        entry->label = strdup(label);
+        entry->label = strdupc(label);
         entry->next = stringLabelHashTable[hash];
         stringLabelHashTable[hash] = entry;
     }
@@ -370,7 +370,7 @@ void generateStringsAtMarker() {
     
     // Get sanitized filename prefix
     char* prefix = getSanitizedFilenamePrefix();
-    if (!prefix) prefix = strdup("unknown");
+    if (!prefix) prefix = strdupc("unknown");
     
     // First build the hash table of existing string labels if redefining
     if (redefineLocalsFound && redefineStringStartIndex > 0) {
@@ -488,7 +488,7 @@ static int arrayExists(const char* name) {
     // Add new entry
     entry = (ArrayEntry*)malloc(sizeof(ArrayEntry));
     if (entry) {
-        entry->name = strdup(name);
+        entry->name = strdupc(name);
         entry->next = arrayHashTable[hash];
         arrayHashTable[hash] = entry;
     }
@@ -513,26 +513,32 @@ void generateArraysAtMarker() {
     
     // Get sanitized filename prefix
     char* prefix = getSanitizedFilenamePrefix();
-    if (!prefix) prefix = strdup("unknown");
-    
-    // First, build the hash table of existing arrays if redefining
-    if (redefineLocalsFound && redefineArrayStartIndex > 0) {
-        for (int i = 0; i < redefineArrayStartIndex; i++) {
+    if (!prefix) prefix = strdupc("unknown");
+      // First, build the hash table of existing arrays if redefining
+    if (redefineLocalsFound && redefineArrayStartIndex > 0) {        for (int i = 0; i < redefineArrayStartIndex; i++) {
             char fullName[256];
-            // Use file_arrayName_index as the label
-            snprintf(fullName, sizeof(fullName), "_%s_%s_%d", prefix, arrayNames[i], i);
+            // Use file_function_arrayName_index as the label
+            snprintf(fullName, sizeof(fullName), "_%s_%s_%s_%d", prefix, 
+                    arrayFunctions[i] ? arrayFunctions[i] : "global", 
+                    arrayNames[i], i);
             arrayExists(fullName);
         }
     }
     
     // Determine starting index based on whether we're redefining
-    int startIdx = redefineLocalsFound ? redefineArrayStartIndex : 0;
-    
-    // Output only new, unique arrays
+    int startIdx = redefineLocalsFound ? redefineArrayStartIndex : 0;    // Output only new, unique arrays
     for (int i = startIdx; i < arrayCount; i++) {
         char fullName[256];
-        // Label: file_arrayName_index
-        snprintf(fullName, sizeof(fullName), "_%s_%s_%d", prefix, arrayNames[i], i);
+        // Label format depends on whether it's a global array or local array
+        if (strcmp(arrayFunctions[i], "global") == 0) {
+            // For global arrays, use file_global_name_index
+            snprintf(fullName, sizeof(fullName), "_%s_global_%s_%d", prefix, 
+                    arrayNames[i], i);
+        } else {
+            // For local arrays, use file_function_name_index
+            snprintf(fullName, sizeof(fullName), "_%s_%s_%s_%d", prefix, 
+                    arrayFunctions[i], arrayNames[i], i);
+        }
 
         // Skip if array was already defined
         if (redefineLocalsFound && arrayExists(fullName)) {
@@ -586,7 +592,7 @@ void generateStringLiteralsSection() {
         
         // Get sanitized filename prefix
         char* prefix = getSanitizedFilenamePrefix();
-        if (!prefix) prefix = strdup("unknown");
+        if (!prefix) prefix = strdupc("unknown");
         
         for (int i = 0; i < stringLiteralCount; i++) {
             fprintf(asmFile, "%s_string_%d: db ", prefix, i);
@@ -611,12 +617,19 @@ void generateStringLiteralsSection() {
         
         // Get sanitized filename prefix
         char* prefix = getSanitizedFilenamePrefix();
-        if (!prefix) prefix = strdup("unknown");
-        
+        if (!prefix) prefix = strdupc("unknown");        
         for (int i = 0; i < arrayCount; i++) {
             char fullName[256];
-            // Label: file_arrayName_index
-            snprintf(fullName, sizeof(fullName), "_%s_%s_%d", prefix, arrayNames[i], i);
+            // Label format depends on whether it's a global array or local array
+            if (strcmp(arrayFunctions[i], "global") == 0) {
+                // For global arrays, use file_global_name_index
+                snprintf(fullName, sizeof(fullName), "_%s_global_%s_%d", prefix, 
+                        arrayNames[i], i);
+            } else {
+                // For local arrays, use file_function_name_index
+                snprintf(fullName, sizeof(fullName), "_%s_%s_%s_%d", prefix, 
+                        arrayFunctions[i], arrayNames[i], i);
+            }
             
             fprintf(asmFile, "%s: ", fullName);
             

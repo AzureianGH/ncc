@@ -1,4 +1,4 @@
-# NCC (Nathan's C Compiler)
+# NCC (Nathan's Compiler Collection)
 
 A lightweight C compiler targeting 8086/DOS systems, designed for simplicity, educational purposes, and retro computing.
 

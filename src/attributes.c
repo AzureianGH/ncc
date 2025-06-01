@@ -5,6 +5,17 @@
 #include "token_debug.h"  // For getTokenName
 #include "error_manager.h" // For reportError
 
+
+char * strdupc (const char *s)
+{
+  size_t len = strlen (s) + 1;
+  void *new = malloc (
+len);
+  if (new == NULL)
+    return NULL;
+  return (char *) memcpy (new, s, len);
+}
+
 // Parse function attributes like __attribute__((naked))
 void parseFunctionAttributes(FunctionInfo* funcInfo) {
     // Process multiple attributes in sequence
@@ -35,7 +46,7 @@ void parseFunctionAttributes(FunctionInfo* funcInfo) {
                             if (funcInfo->deprecation_msg) {
                                 free(funcInfo->deprecation_msg);
                             }
-                            funcInfo->deprecation_msg = strdup(getCurrentToken().value);
+                            funcInfo->deprecation_msg = strdupc(getCurrentToken().value);
                             consume(TOKEN_STRING);
                         }
                         expect(TOKEN_RPAREN);
@@ -80,7 +91,7 @@ void parseFunctionAttributes(FunctionInfo* funcInfo) {
                             if (funcInfo->deprecation_msg) {
                                 free(funcInfo->deprecation_msg);
                             }
-                            funcInfo->deprecation_msg = strdup(getCurrentToken().value);
+                            funcInfo->deprecation_msg = strdupc(getCurrentToken().value);
                             consume(TOKEN_STRING);
                         }
                         expect(TOKEN_RPAREN);

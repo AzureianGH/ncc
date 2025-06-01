@@ -190,7 +190,7 @@ ASTNode* parseDeclaration() {
         exit(1);
     }
     
-    char* name = strdup(getCurrentToken().value);
+    char* name = strdupc(getCurrentToken().value);
     consume(TOKEN_IDENTIFIER);
     
     // Check if this is a function definition
@@ -220,7 +220,7 @@ ASTNode* parseParameter() {
         exit(1);
     }
     
-    char* name = strdup(getCurrentToken().value);
+    char* name = strdupc(getCurrentToken().value);
     consume(TOKEN_IDENTIFIER);
     
     // Check if trying to declare a parameter of type void (which is invalid)
@@ -466,7 +466,7 @@ ASTNode* parseInlineAssembly() {
         exit(1);
     }
     
-    node->asm_stmt.code = strdup(getCurrentToken().value);
+    node->asm_stmt.code = strdupc(getCurrentToken().value);
     consume(TOKEN_STRING);
     
     // Check for extended syntax with colons for operands: __asm("instr %0" : : "r"(var))
@@ -507,7 +507,7 @@ ASTNode* parseInlineAssembly() {
                 }
                 
                 // Store the constraint
-                node->asm_stmt.constraints[node->asm_stmt.operand_count] = strdup(getCurrentToken().value);
+                node->asm_stmt.constraints[node->asm_stmt.operand_count] = strdupc(getCurrentToken().value);
                 consume(TOKEN_STRING);
                 
                 // Parse operand expression: (variable)
@@ -942,7 +942,7 @@ ASTNode* parseShiftExpression() {
 ASTNode* parsePrimaryExpression() {
     if (tokenIs(TOKEN_IDENTIFIER)) {
         // Check if this is a function call
-        char* name = strdup(getCurrentToken().value);
+        char* name = strdupc(getCurrentToken().value);
         consume(TOKEN_IDENTIFIER);
         
         if (tokenIs(TOKEN_LPAREN)) {
@@ -1062,9 +1062,9 @@ ASTNode* parsePrimaryExpression() {
         // Store the string value including quotes
         const char* tokenValue = getCurrentToken().value;
         if (tokenValue) {
-            node->literal.string_value = strdup(tokenValue);
+            node->literal.string_value = strdupc(tokenValue);
         } else {
-            node->literal.string_value = strdup(""); // Empty string as fallback
+            node->literal.string_value = strdupc(""); // Empty string as fallback
         }
         
         consume(TOKEN_STRING);

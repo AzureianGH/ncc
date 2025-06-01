@@ -1,5 +1,6 @@
 #include "preprocessor.h"
 #include "error_manager.h"
+#include "ast.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -36,8 +37,8 @@ void initPreprocessor() {
     
     // Define some built-in macros
     defineMacro("__NCC__", "65536");      // Compiler ID
-    defineMacro("__NCC_MAJOR__", "0");    // Major version
-    defineMacro("__NCC_MINOR__", "183");   // Minor version
+    defineMacro("__NCC_MAJOR__", "1");    // Major version (1 == First Release)
+    defineMacro("__NCC_MINOR__", "0");   // Minor version
     // 0.45v
     defineMacro("__x86_16__", "1");
 
@@ -50,7 +51,7 @@ void addIncludePath(const char* path) {
         return;
     }
     
-    includePaths[numIncludePaths++] = strdup(path);
+    includePaths[numIncludePaths++] = strdupc(path);
 }
 
 // Check if a file has been included with #pragma once
@@ -185,7 +186,7 @@ static char* findIncludeFile(const char* filename, int isSystemHeader) {
         file = fopen(filename, "r");
         if (file) {
             fclose(file);
-            return strdup(filename);
+            return strdupc(filename);
         }
     }
     
@@ -195,7 +196,7 @@ static char* findIncludeFile(const char* filename, int isSystemHeader) {
         file = fopen(fullPath, "r");
         if (file) {
             fclose(file);
-            return strdup(fullPath);
+            return strdupc(fullPath);
         }
     }
     
@@ -233,7 +234,7 @@ static char* readFileToString(const char* filename) {
 char* preprocessFile(const char* filename) {
     // Check if the file was already processed with #pragma once
     if (isFileAlreadyIncluded(filename)) {
-        return strdup(""); // Return empty string for already included files
+        return strdupc(""); // Return empty string for already included files
     }
     
     // Read file content

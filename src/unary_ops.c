@@ -83,25 +83,25 @@ ASTNode* parseUnaryExpression() {
                 token = getCurrentToken();
                 
                 if (token.type == TOKEN_INT) {
-                    operand->identifier = strdup("unsigned int");
+                    operand->identifier = strdupc("unsigned int");
                     consume(token.type);
                 } else if (token.type == TOKEN_CHAR) {
-                    operand->identifier = strdup("unsigned char");
+                    operand->identifier = strdupc("unsigned char");
                     consume(token.type);
                 } else if (token.type == TOKEN_SHORT) {
-                    operand->identifier = strdup("unsigned short");
+                    operand->identifier = strdupc("unsigned short");
                     consume(token.type);
                 } else {
-                    operand->identifier = strdup("unsigned");
+                    operand->identifier = strdupc("unsigned");
                     // No need to consume anything else
                 }
             } else {
                 // Regular type
-                if (token.type == TOKEN_INT) operand->identifier = strdup("int");
-                else if (token.type == TOKEN_CHAR) operand->identifier = strdup("char");
-                else if (token.type == TOKEN_SHORT) operand->identifier = strdup("short");
-                else if (token.type == TOKEN_VOID) operand->identifier = strdup("void");
-                else if (token.type == TOKEN_BOOL) operand->identifier = strdup("bool");
+                if (token.type == TOKEN_INT) operand->identifier = strdupc("int");
+                else if (token.type == TOKEN_CHAR) operand->identifier = strdupc("char");
+                else if (token.type == TOKEN_SHORT) operand->identifier = strdupc("short");
+                else if (token.type == TOKEN_VOID) operand->identifier = strdupc("void");
+                else if (token.type == TOKEN_BOOL) operand->identifier = strdupc("bool");
                 
                 consume(token.type);
             }
@@ -206,7 +206,7 @@ ASTNode* parsePostfixExpression() {
             
             ASTNode* node = createNode(NODE_MEMBER_ACCESS);
             node->member_access.op = OP_DOT;
-            node->member_access.member_name = strdup(memberName);
+            node->member_access.member_name = strdupc(memberName);
             node->left = left;
             left = node;
         }
@@ -225,7 +225,7 @@ ASTNode* parsePostfixExpression() {
             
             ASTNode* node = createNode(NODE_MEMBER_ACCESS);
             node->member_access.op = OP_ARROW;
-            node->member_access.member_name = strdup(memberName);
+            node->member_access.member_name = strdupc(memberName);
             node->left = left;
             left = node;
         }

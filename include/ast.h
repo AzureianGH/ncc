@@ -266,4 +266,6 @@ void printAST(ASTNode* node, int indent);
 // Get the size of a data type in bytes
 int getTypeSize(DataType type);
 
+char * strdupc (const char *s);
+
 #endif // AST_H
