@@ -10,14 +10,23 @@ void _after_diskload() {
     initUart();
     writeLog("UART initialized.\r\n", 0);
     writeLog("NCC Bootloader loaded in at (", 2);
-    writeDebug(stoa_hex(getCS()));
+    writeDebug(stoa_hex(seconds));
     writeDebug(":8000)\r\n");
     writeLog("Installing INTs...\r\n", 2);
     installIRQS();
     initPIT();
     writeLog("PIT initialized.\r\n", 0);
     
-    
+    while (true)
+    {
+        writeDebug("Time since boot: ");
+        writeDebug(stoa_dec(getSeconds()));
+        //use asm to clear the line
+        __asm("mov ah, 0x0E"); // BIOS teletype function
+        __asm("mov al, 0x0D"); // Carriage return
+        __asm("int 0x10");       // BIOS interrupt to write character
+        __asm("hlt"); // Halt CPU to save power
+    }
     haltForever();
 }
 
@@ -132,98 +141,67 @@ void memset_far(unsigned short seg, unsigned short offset, unsigned char value, 
     setESSegment(old_seg);
 }
 
-// Thread-safe version of stoa_hex that works with interrupts
+static char hex_buffer[5]; // 4 hex digits + null terminator
+
 char* stoa_hex(unsigned short i)
 {
-    // Use per-call buffer instead of static to avoid interrupt corruption
-    // Each call gets its own buffer space from the stack
-    char buffer[5]; // 4 hex digits + null terminator
-    
     // Disable interrupts while we're creating the string
     __asm("cli");
     
-    // Convert each nibble to a hex digit using direct computation instead of indexing
+    // Convert each nibble to a hex digit
     unsigned char digit;
     
-    // First digit (most significant nibble)
     digit = (i >> 12) & 0xF;
-    buffer[0] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+    hex_buffer[0] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
     
-    // Second digit
     digit = (i >> 8) & 0xF;
-    buffer[1] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+    hex_buffer[1] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
     
-    // Third digit
     digit = (i >> 4) & 0xF;
-    buffer[2] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+    hex_buffer[2] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
     
-    // Fourth digit (least significant nibble)
     digit = i & 0xF;
-    buffer[3] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+    hex_buffer[3] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
     
-    buffer[4] = '\0'; // Null-terminate the string
-    
-    // We need to copy the buffer to a static location to return it
-    static char return_buffer[5];
-    return_buffer[0] = buffer[0];
-    return_buffer[1] = buffer[1];
-    return_buffer[2] = buffer[2];
-    return_buffer[3] = buffer[3];
-    return_buffer[4] = buffer[4];
+    hex_buffer[4] = '\0';
     
     // Re-enable interrupts
     __asm("sti");
     
-    return return_buffer;
+    return hex_buffer;
 }
+
+// Buffer for stoa_dec to return
+static char dec_buffer[6]; // 5 digits + null terminator
 
 char* stoa_dec(unsigned short i)
 {
-    // Use per-call buffer instead of static to avoid interrupt corruption
-    // Each call gets its own buffer space from the stack
-    char buffer[6]; // 5 digits + null terminator
-    
     // Disable interrupts while we're creating the string
     __asm("cli");
     
-    // Convert each digit to a decimal character using direct computation instead of indexing
     unsigned char digit;
     
-    // First digit (most significant digit)
     digit = (i / 10000) % 10;
-    buffer[0] = '0' + digit;
+    dec_buffer[0] = '0' + digit;
     
-    // Second digit
     digit = (i / 1000) % 10;
-    buffer[1] = '0' + digit;
+    dec_buffer[1] = '0' + digit;
     
-    // Third digit
     digit = (i / 100) % 10;
-    buffer[2] = '0' + digit;
+    dec_buffer[2] = '0' + digit;
     
-    // Fourth digit
     digit = (i / 10) % 10;
-    buffer[3] = '0' + digit;
+    dec_buffer[3] = '0' + digit;
     
-    // Fifth digit (least significant digit)
     digit = i % 10;
-    buffer[4] = '0' + digit;
+    dec_buffer[4] = '0' + digit;
     
-    buffer[5] = '\0'; // Null-terminate the string
-    
-    // We need to copy the buffer to a static location to return it
-    static char return_buffer[6];
-    return_buffer[0] = buffer[0];
-    return_buffer[1] = buffer[1];
-    return_buffer[2] = buffer[2];
-    return_buffer[3] = buffer[3];
-    return_buffer[4] = buffer[4];
-    return_buffer[5] = buffer[5];
+    dec_buffer[5] = '\0';
     
     // Re-enable interrupts
     __asm("sti");
     
-    return return_buffer;
+    return dec_buffer;
 }
 
 
@@ -366,6 +344,11 @@ void installIRQS()
 
 uint16_t seconds = 0;
 uint16_t tick = 0;
+
+uint16_t getSeconds()
+{
+    return seconds;
+}
 
 uint16_t getTick()
 {

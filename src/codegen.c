@@ -1196,46 +1196,57 @@ void generateExpression(ASTNode* node) {
                 }
             } else {
             // Local variables have negative offsets from bp
-                int varOffset = getVariableOffset(node->identifier);
-                  if (varOffset == 0) {
-                    // Could be a global variable
-                    
-                    // Get sanitized filename prefix
+                 int varOffset = getVariableOffset(node->identifier);
+                   if (varOffset == 0) {
+                    // Global variable or array
                     const char* filename = getCurrentSourceFilename();
                     char* prefix = (char*)malloc(strlen(filename) + 1);
                     if (prefix) {
                         strcpy(prefix, filename);
-                        char* dot = strrchr(prefix, '.');
-                        if (dot) *dot = '\0';
-                        for (char* c = prefix; *c; c++) {
-                            if (!isalnum(*c) && *c != '_') {
-                                *c = '_';
+                        char* dot = strrchr(prefix, '.'); if (dot) *dot = '\0';
+                        for (char* c = prefix; *c; c++) if (!isalnum(*c) && *c != '_') *c = '_';
+                    }
+                    // Determine if this global is an array
+                    TypeInfo* tinfo = getTypeInfo(node->identifier);
+                    if (tinfo && tinfo->is_array) {
+                        extern int arrayCount; extern char** arrayNames; extern char** arrayFunctions;
+                        int idx = -1;
+                        for (int ai = 0; ai < arrayCount; ai++) {
+                            if (strcmp(arrayNames[ai], node->identifier) == 0 && strcmp(arrayFunctions[ai], "global") == 0) {
+                                idx = ai; break;
                             }
                         }
-                        
-                        fprintf(asmFile, "    ; Loading potentially global variable %s\n", node->identifier);
-                        fprintf(asmFile, "    mov ax, [_%s_%s] ; Load global variable\n", 
-                                prefix, node->identifier);
+                        if (idx >= 0 && prefix) {
+                            fprintf(asmFile, "    mov ax, _%s_%s_%d ; Address of global array\n", prefix, node->identifier, idx);
+                            free(prefix);
+                            break;
+                        }
+                    }
+                    // Fallback for scalar global
+                    if (prefix) {
+                        fprintf(asmFile, "    ; Loading global variable %s\n", node->identifier);
+                        fprintf(asmFile, "    mov ax, [_%s_%s] ; Load global variable\n", prefix, node->identifier);
                         free(prefix);
                     } else {
-                        fprintf(asmFile, "    ; Loading potentially global variable %s\n", node->identifier);
+                        fprintf(asmFile, "    ; Loading global variable %s\n", node->identifier);
                         fprintf(asmFile, "    mov ax, [_%s] ; Load global variable (fallback)\n", node->identifier);
-                    }                } else {
-                    // Check if it's a long type
-                    TypeInfo* typeInfo = getTypeInfo(node->identifier);
-                    if (typeInfo && (typeInfo->type == TYPE_LONG || typeInfo->type == TYPE_UNSIGNED_LONG)) {
-                        // For 32-bit types, load low word into AX and high word into DX
-                        fprintf(asmFile, "    ; Loading long variable %s\n", node->identifier);
-                        fprintf(asmFile, "    mov ax, [bp-%d] ; Load low word\n", varOffset);
-                        fprintf(asmFile, "    mov dx, [bp-%d] ; Load high word\n", varOffset - 2);
-                    } else {
-                        // Ensure we use word-aligned offsets for local variables
-                        fprintf(asmFile, "    mov ax, [bp-%d] ; Load local variable %s\n", 
-                                varOffset, node->identifier);
                     }
-                }
-            }
-            break;
+                 } else {
+                     // Check if it's a long type
+                     TypeInfo* typeInfo = getTypeInfo(node->identifier);
+                     if (typeInfo && (typeInfo->type == TYPE_LONG || typeInfo->type == TYPE_UNSIGNED_LONG)) {
+                         // For 32-bit types, load low word into AX and high word into DX
+                         fprintf(asmFile, "    ; Loading long variable %s\n", node->identifier);
+                         fprintf(asmFile, "    mov ax, [bp-%d] ; Load low word\n", varOffset);
+                         fprintf(asmFile, "    mov dx, [bp-%d] ; Load high word\n", varOffset - 2);
+                     } else {
+                         // Ensure we use word-aligned offsets for local variables
+                         fprintf(asmFile, "    mov ax, [bp-%d] ; Load local variable %s\n", 
+                                 varOffset, node->identifier);
+                     }
+                 }
+             }
+             break;
               case NODE_BINARY_OP:
             // Generate code for binary operation
             generateBinaryOp(node);
@@ -1616,7 +1627,7 @@ void generateBinaryOp(ASTNode* node) {
             fprintf(asmFile, "    jne neq_true_%d\n", labelCounter);
             fprintf(asmFile, "    jmp neq_end_%d\n", labelCounter);
             fprintf(asmFile, "neq_true_%d:\n", labelCounter);
-            fprintf(asmFile, "    mov ax, 1  ; Set true\n");
+                       fprintf(asmFile, "    mov ax, 1  ; Set true\n");
             fprintf(asmFile, "neq_end_%d:\n", labelCounter++);
             break;
         case OP_LT:

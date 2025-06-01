@@ -519,7 +519,8 @@ void generateArraysAtMarker() {
     if (redefineLocalsFound && redefineArrayStartIndex > 0) {
         for (int i = 0; i < redefineArrayStartIndex; i++) {
             char fullName[256];
-            snprintf(fullName, sizeof(fullName), "_%s_%s", prefix, arrayNames[i]);
+            // Use file_arrayName_index as the label
+            snprintf(fullName, sizeof(fullName), "_%s_%s_%d", prefix, arrayNames[i], i);
             arrayExists(fullName);
         }
     }
@@ -530,9 +531,8 @@ void generateArraysAtMarker() {
     // Output only new, unique arrays
     for (int i = startIdx; i < arrayCount; i++) {
         char fullName[256];
-        // Label: file_function_arrayName_index
-        snprintf(fullName, sizeof(fullName), "_%s_%s_%s_%d", prefix,
-                 arrayFunctions[i], arrayNames[i], i);
+        // Label: file_arrayName_index
+        snprintf(fullName, sizeof(fullName), "_%s_%s_%d", prefix, arrayNames[i], i);
 
         // Skip if array was already defined
         if (redefineLocalsFound && arrayExists(fullName)) {
@@ -615,8 +615,8 @@ void generateStringLiteralsSection() {
         
         for (int i = 0; i < arrayCount; i++) {
             char fullName[256];
-            snprintf(fullName, sizeof(fullName), "_%s_%s_%s_%d", prefix,
-                    arrayFunctions[i], arrayNames[i], i);
+            // Label: file_arrayName_index
+            snprintf(fullName, sizeof(fullName), "_%s_%s_%d", prefix, arrayNames[i], i);
             
             fprintf(asmFile, "%s: ", fullName);
             

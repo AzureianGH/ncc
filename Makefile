@@ -39,4 +39,7 @@ test_os:
 	dd if=test\kernel.bin of=test\floppy.img bs=512 seek=1 conv=notrunc
 	qemu-system-x86_64 -fda test\floppy.img
 
+test_com:
+	bin/ncc -com .\test\testcom.c -o .\test\test.com
+
 .PHONY: all clean quiet build_bootloader build_kernel test_os
