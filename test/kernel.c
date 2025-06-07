@@ -17,16 +17,11 @@ void _after_diskload() {
     initPIT();
     writeLog("PIT initialized.\r\n", 0);
     
-    while (true)
-    {
-        writeDebug("Time since boot: ");
-        writeDebug(stoa_dec(getSeconds()));
-        //use asm to clear the line
-        __asm("mov ah, 0x0E"); // BIOS teletype function
-        __asm("mov al, 0x0D"); // Carriage return
-        __asm("int 0x10");       // BIOS interrupt to write character
-        __asm("hlt"); // Halt CPU to save power
-    }
+    writeDebug("NCC Version: ");
+    writeDebug(stoa_hex(__NCC_MAJOR__));
+    writeDebug(".");
+    writeDebug(stoa_hex(__NCC_MINOR__));
+    writeDebug("\r\n");
     haltForever();
 }
 
@@ -39,10 +34,11 @@ void clearScreen()
 [[deprecated("This function will be removed soon."), naked]]
 void haltForever()
 {
-    writeLog("Halt forever called.\r\n", 0);
-    __asm("cli");           // Disable interrupts
-    __asm("hlt");           // Halt CPU
-    __asm("jmp _haltForever"); // Infinite loop
+    writeLog("HELP ME PLEASE IT BURNS OH GOD... System halted.\r\n", 1);
+    __asm("cli");
+    while (true) {
+        __asm("hlt");
+    }
 }
 
 void writeChar(char c)

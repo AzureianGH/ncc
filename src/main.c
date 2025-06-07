@@ -52,14 +52,13 @@ void printUsage(const char* programName) {
     fprintf(stderr, "  -O<level>    Set optimization level (0=none, 1=basic)\n");
     fprintf(stderr, "  -com         Target MS-DOS executable (ORG 0x100)\n");
     fprintf(stderr, "  -sys         Target bootloader (ORG 0x7C00)\n");
-    fprintf(stderr, "  -ss SS:SP    Set stack segment and pointer (for bootloaders)\n");
-#ifndef NO_NASM
+#ifndef NO_nas
     fprintf(stderr, "  -S           Stop after generating assembly (don't assemble)\n");
 #endif
     fprintf(stderr, "  -h           Display this help and exit\n");
 }
 
-#ifndef NO_NASM
+#ifndef NO_nas
 char* getExecutableDir() {
     static char buffer[MAX_PATH_LEN];
     
@@ -90,7 +89,7 @@ int main(int argc, char* argv[]) {
     int debugLineMode = 0;
     unsigned int originAddress = 0;
     int optimizationLevel = OPT_LEVEL_NONE;
-#ifndef NO_NASM
+#ifndef NO_nas
     int stopAfterAsm = 0;
 #endif
     int systemMode = 0;  // Flag for bootloader mode
@@ -116,26 +115,13 @@ int main(int argc, char* argv[]) {
             systemMode = 0;  // COM mode, not system mode
         } else if (strcmp(argv[i], "-sys") == 0 || strcmp(argv[i], "-SYS") == 0) {
             originAddress = 0x7C00;  // Standard bootloader address
-            systemMode = 1;  // Enable system mode (bootloader)
-        } else if ((strcmp(argv[i], "-ss") == 0 || strcmp(argv[i], "-SS") == 0) && i + 1 < argc) {
-            char* sssp = argv[++i];
-            char* colon = strchr(sssp, ':');
-            if (colon) {
-                *colon = '\0';  // Split at colon
-                stackSegment = (unsigned int)strtoul(sssp, NULL, 16);
-                stackPointer = (unsigned int)strtoul(colon + 1, NULL, 16);
-                setStackSegmentPointer = 1;
-            } else {
-                fprintf(stderr, "Error: -ss option requires SS:SP format in hexadecimal\n");
-                return 1;
-            }
         } else if (strcmp(argv[i], "-o") == 0 && i + 1 < argc) {
             outputFile = argv[++i];
         } else if (strcmp(argv[i], "-d") == 0) {
             debugMode = 1;
         } else if (strcmp(argv[i], "-dl") == 0) {
             debugLineMode = 1;
-#ifndef NO_NASM
+#ifndef NO_nas
         } else if (strcmp(argv[i], "-S") == 0) {
             stopAfterAsm = 1;
 #endif
@@ -147,12 +133,12 @@ int main(int argc, char* argv[]) {
             return 0;
         } else if (strcmp(argv[i], "--version") == 0) {
             #ifdef _WIN32
-            printf("ncc [ncc-win-x64] ntos(6.2025.1.0) - 1.00\n");
+            printf("ncc [ncc-win-x64] ntos(6.2025.1.1) - 1.10\n");
             printf("Copyright (C) 2025 Nathan's Compiler Collection\n");
             printf("This is free software; see the source for copying conditions.  There is NO\n");
             printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
             #else
-            printf("ncc [ncc-linux-x64] any-linux(6.2025.1.0) - 1.00\n");
+            printf("ncc [ncc-linux-x64] any-linux(6.2025.1.1) - 1.10\n");
             printf("Copyright (C) 2025 Nathan's Compiler Collection\n");
             printf("This is free software; see the source for copying conditions.  There is NO\n");
             printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\r");
@@ -212,7 +198,7 @@ int main(int argc, char* argv[]) {
     initLexer(sourceCode);
     initParser();
 
-#ifndef NO_NASM
+#ifndef NO_nas
     // Use temp.asm if we're going to assemble
     const char* asmFile = stopAfterAsm ? outputFile : "temp.asm";
 #else
@@ -242,7 +228,7 @@ int main(int argc, char* argv[]) {
     cleanupPreprocessor();
     free(sourceCode);
 
-#ifndef NO_NASM
+#ifndef NO_nas
     // Assemble if not stopping after ASM
     if (!stopAfterAsm) {
         char command[1024];
@@ -250,17 +236,17 @@ int main(int argc, char* argv[]) {
         
 #ifdef _WIN32
         snprintf(command, sizeof(command),
-            "cmd /C \"\"%s%ctooling%cnasm%cnasm.exe\" -f bin temp.asm -o \"%s\"\"",
-            exeDir, PATH_SEPARATOR, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
+            "cmd /C \"\"%s%ctooling%cnas.exe\" -m16 -f bin temp.asm -o \"%s\"\"",
+            exeDir, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
 #else
         snprintf(command, sizeof(command),
-                    "\"%s%ctooling%cnasm%cnasm\" -f bin temp.asm -o \"%s\"",
-                    exeDir, PATH_SEPARATOR, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
+                    "\"%s%ctooling%cnas\" -m16 -f bin temp.asm -o \"%s\"",
+                    exeDir, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
 #endif
 
         int result = system(command);
         if (result != 0) {
-            fprintf(stderr, "NASM failed\n");
+            fprintf(stderr, "NAS failed\n");
             return 1;
         }
         remove("temp.asm");
