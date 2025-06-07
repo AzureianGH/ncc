@@ -1,88 +1,206 @@
 # NCC (Nathan's Compiler Collection)
 
-A lightweight C compiler targeting 8086/DOS systems, designed for simplicity, educational purposes, and retro computing.
-
-## Overview
-
-NCC is a compact C compiler that translates a significant subset of the C language into x86 assembly for 16-bit DOS environments. It's ideal for:
-
-- Retro computing projects
-- DOS development
-- Bootloader and small OS development
-- Learning compiler design and implementation
-- Embedded systems with limited resources
+A lightweight C compiler targeting real-mode/DOS systems, designed for simplicity, educational purposes, and retro computing. NCC compiles C code to x86 assembly and can generate bootloaders, MS-DOS executables, and bare-metal programs for 16-bit systems.
 
 ## Features
 
-- **Simplified C Subset**: Implements essential C language features
-- **8086 Assembly Output**: Generates code for 16-bit x86 processors
-- **Struct Support**: Full implementation of C structures
-- **Small Memory Footprint**: Designed for resource-constrained environments
-- **Fast Compilation**: Streamlined compilation process
-- **Readable Assembly Output**: Generated assembly is human-readable and well-commented
-- **DOS/8086 Targeting**: Perfect for vintage computing or embedded projects
-- **Preprocessor Support**: Includes basic preprocessor directives with proper binary operator handling
-- **Global Array Support**: Improved array reference generation for global arrays
+- **Full C Compiler Pipeline**: Lexical analysis, parsing, type checking, and code generation
+- **Multiple Target Formats**:
+  - MS-DOS executables (.COM files)
+  - Bootloader binaries (512-byte MBR compatible)
+  - Custom origin addresses for bare-metal programming
+- **Advanced Language Support**:
+  - Structs with nested field access
+  - Arrays and array initialization
+  - Control flow (if/else, while, do-while, for loops)
+  - Function calls and parameters
+  - Inline assembly with `__asm()` 
+  - Preprocessor with includes and macros
+  - Unary and compound expressions
+- **Development Features**:
+  - AST debugging and visualization
+  - Line number tracking through preprocessing
+  - Built-in assembler (NAS - Nathan's Assembler)
+  - Optimization passes
+  - Comprehensive error reporting
 
-## Getting Started
+## Quick Start
 
-### Building the Compiler
+### Building NCC
 
 ```bash
 make
 ```
 
+For a clean build:
+```bash
+make clean && make
+```
+
 ### Basic Usage
 
 ```bash
-./bin/ncc myprogram.c -o myprogram.asm
+# Compile to assembly
+./bin/ncc source.c -o output.asm
+
+# Compile MS-DOS .COM executable
+./bin/ncc -com program.c -o program.com
+
+# Compile bootloader
+./bin/ncc -sys bootloader.c -o boot.bin
+
+# Custom origin address
+./bin/ncc -disp 0x8000 kernel.c -o kernel.bin
 ```
 
-### Creating Executables
+## Command Line Options
 
-After compiling to assembly, use an assembler like NASM to create executable binaries:
+| Option | Description |
+|--------|-------------|
+| `-o <file>` | Output filename (default: output.asm) |
+| `-com` | Target MS-DOS executable (ORG 0x100) |
+| `-sys` | Target bootloader (ORG 0x7C00) |
+| `-disp <addr>` | Set custom origin displacement address |
+| `-I<path>` | Add include search path |
+| `-O<level>` | Optimization level (0=none, 1=basic) |
+| `-S` | Stop after assembly generation (don't assemble) |
+| `-d` | Debug mode (print AST) |
+| `-dl` | Debug line tracking |
+| `-h` | Display help |
+
+## Example Programs
+
+### Hello World (MS-DOS)
+
+```c
+void main() {
+    printstring("Hello, World!$");
+}
+
+void printstring(char* str) {
+    __asm("mov dx, [bp+4]");  // Get string parameter
+    __asm("mov ah, 0x09");    // DOS print string function
+    __asm("int 0x21");        // Call DOS interrupt
+}
+```
+
+Compile with:
+```bash
+./bin/ncc -com hello.c -o hello.com
+```
+
+### Simple Bootloader
+
+```c
+void main() {
+    // Clear screen and print message
+    __asm("mov ah, 0x06");   // Scroll up function
+    __asm("mov al, 0");      // Clear entire screen
+    __asm("mov bh, 0x07");   // Attribute
+    __asm("mov cx, 0");      // Upper left
+    __asm("mov dx, 0x184F"); // Lower right  
+    __asm("int 0x10");       // BIOS video interrupt
+    
+    // Print boot message
+    // ... (additional boot code)
+    
+    // Infinite loop
+    while(1) {}
+}
+```
+
+Compile with:
+```bash
+./bin/ncc -sys boot.c -o boot.bin
+```
+
+## Testing
+
+### Run Test Suite
 
 ```bash
-nasm -f bin myprogram.asm -o myprogram.com
+# Test MS-DOS program
+make test_com
+
+# Test bootloader in QEMU
+make test_os
 ```
 
-### Creating Operating Systems and Bootloaders
-
-You can make bootloaders and full 16-bit OSes with specialized options:
+### Manual Testing
 
 ```bash
-# Using displacement address (manual approach)
-ncc -disp 0x7C00 myos.c -o myos.bin
-
-# Using bootloader mode (recommended approach)
-ncc -sys myos.c -o myos.bin
-
-# Using bootloader mode with custom stack setup
-ncc -sys -ss 0000:7C00 myos.c -o myos.bin
+# Compile and run in QEMU
+./bin/ncc -sys bootloader.c -o boot.bin
+qemu-system-x86_64 -fda boot.bin
 ```
 
-## Examples
+## Architecture
 
-The `test/` directory contains various example programs demonstrating the compiler's capabilities, including:
+NCC is structured as a traditional compiler with these phases:
 
-- Simple COM executables
-- Simple bootloader examples
+1. **Preprocessor** (`preprocessor.c`) - Handle includes and macros
+2. **Lexer** (`lexer.c`) - Tokenize source code
+3. **Parser** (`parser.c`) - Build abstract syntax tree
+4. **Type Checker** (`type_checker.c`) - Semantic analysis
+5. **Code Generator** (`codegen.c`) - Emit x86 assembly
+6. **Assembler** (NAS) - Convert assembly to machine code
 
-## Recent Improvements
+### Key Components
 
-- Fixed preprocessor warnings related to binary operators
-- Improved global array references in generated code
-- Enhanced array label generation in string_literals.c
-- Fixed identifier references to arrays in codegen.c
+- **AST Management** - Full abstract syntax tree with cleanup
+- **Struct Support** - Complete struct parsing and code generation  
+- **Loop Constructs** - While, do-while, and for loop implementations
+- **Expression Handling** - Unary operations and compound expressions
+- **Memory Management** - String literals and array operations
+- **Error Handling** - Comprehensive error reporting system
 
-## License
+## Supported C Features
 
-MIT License is used.
+### Data Types
+- `int`, `char`, `void`
+- Pointers and pointer arithmetic
+- Arrays (single and multi-dimensional)
+- Structs with nested access
+
+### Control Flow
+- `if`/`else` statements
+- `while` loops
+- `do-while` loops  
+- `for` loops
+- Function calls
+
+### Operators
+- Arithmetic: `+`, `-`, `*`, `/`, `%`
+- Comparison: `==`, `!=`, `<`, `>`, `<=`, `>=`
+- Logical: `&&`, `||`, `!`
+- Assignment: `=`, `+=`, `-=`, etc.
+- Unary: `++`, `--`, `&`, `*`
+
+### Advanced Features
+- Inline assembly with `__asm()`
+- Preprocessor directives (`#include`, `#define`)
+- Function parameters and local variables
+- Global variables and initialization
+- String literals and character constants
 
 ## Contributing
 
-Contributions, bug reports, and feature requests are welcome! Feel free to submit pull requests or open issues on GitHub.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contribution guidelines.
 
-### Third-Party Tools
+## License
 
-This project includes NASM (Netwide Assembler), which is distributed under the 2-Clause BSD License. See `LICENSE.nasm.txt` for details.
+NCC is designed for educational and retro computing purposes. See the individual source files for specific licensing information.
+
+## System Requirements
+
+- GCC or compatible C compiler (for building NCC)
+- Make build system
+- QEMU (optional, for testing bootloaders)
+- Linux/Unix environment or Windows with MSYS2/WSL
+
+## Getting Help
+
+- Check the test files in `test/` for usage examples
+- Use `-d` flag to debug AST generation
+- Use `-dl` flag to trace preprocessor line mappings
+- Examine generated assembly with `-S` flag

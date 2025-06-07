@@ -32,7 +32,7 @@ quiet:
 
 # Create floppy image using bootloader as MBR and kernel as second sector
 test_os:
-	bin/ncc -sys -ss 0x9000:0xFFFE -I./test ./test/bootloader.c -o ./test/bootloader.bin
+	bin/ncc -disp 0x7C00 -I./test ./test/bootloader.c -o ./test/bootloader.bin
 	bin/ncc -disp 0x8000 -I./test ./test/kernel.c -o ./test/kernel.bin
 	dd if=/dev/zero of=test/floppy.img bs=512 count=2880
 	dd if=test/bootloader.bin of=test/floppy.img conv=notrunc
@@ -41,5 +41,13 @@ test_os:
 
 test_com:
 	bin/ncc -com .\test\testcom.c -o .\test\test.com
+
+test_nas:
+	bin/ncc -disp 0x7C00 -I./test ./test/nas.c -o ./test/floppy.img
+	qemu-system-x86_64 -fda test/floppy.img
+
+dbg_nas:
+	bin/ncc -disp 0x7C00 -I./test ./test/nas.c -o ./test/floppy.img
+	ndisasm -b 16 ./test/floppy.img > test/floppy.asm
 
 .PHONY: all clean quiet build_bootloader build_kernel test_os

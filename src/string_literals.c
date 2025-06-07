@@ -432,7 +432,7 @@ void generateStringsAtMarker() {
         }
         
         // Output the string
-        fprintf(asmFile, "%s: db ", labelName);
+        fprintf(asmFile, "%s: #db ", labelName);
         
         // Output each byte of the string as a decimal value
         size_t len = strlen(stringLiterals[i]);
@@ -561,17 +561,17 @@ void generateArraysAtMarker() {
                 case TYPE_CHAR:
                 case TYPE_UNSIGNED_CHAR:
                 case TYPE_BOOL:
-                    directive = "db";
+                    directive = "#db";
                     elementSize = 1;
                     break;
                 default:
-                    directive = "dw";
+                    directive = "#dw";
                     elementSize = 2;
                     break;
             }
             
             // Output array declaration with zeros
-            fprintf(asmFile, "times %d %s 0 ; Array of %d bytes\n", 
+            fprintf(asmFile, "#times %d %s 0 ; Array of %d bytes\n", 
                     arraySizes[i], directive, arraySizes[i] * elementSize);
         }
     }
@@ -595,7 +595,7 @@ void generateStringLiteralsSection() {
         if (!prefix) prefix = strdupc("unknown");
         
         for (int i = 0; i < stringLiteralCount; i++) {
-            fprintf(asmFile, "%s_string_%d: db ", prefix, i);
+            fprintf(asmFile, "%s_string_%d: #db ", prefix, i);
             
             // Output each byte of the string as a decimal value
             size_t len = strlen(stringLiterals[i]);
@@ -647,17 +647,17 @@ void generateStringLiteralsSection() {
                     case TYPE_CHAR:
                     case TYPE_UNSIGNED_CHAR:
                     case TYPE_BOOL:
-                        directive = "db";
+                        directive = "#db";
                         elementSize = 1;
                         break;
                     default:
-                        directive = "dw";
+                        directive = "#dw";
                         elementSize = 2;
                         break;
                 }
                 
                 // Output array declaration with zeros
-                fprintf(asmFile, "times %d %s 0 ; Array of %d bytes\n", 
+                fprintf(asmFile, "#times %d %s 0 ; Array of %d bytes\n", 
                         arraySizes[i], directive, arraySizes[i] * elementSize);
             }
         }

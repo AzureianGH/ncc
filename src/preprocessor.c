@@ -38,7 +38,7 @@ void initPreprocessor() {
     // Define some built-in macros
     defineMacro("__NCC__", "65536");      // Compiler ID
     defineMacro("__NCC_MAJOR__", "1");    // Major version (1 == First Release)
-    defineMacro("__NCC_MINOR__", "0");   // Minor version
+    defineMacro("__NCC_MINOR__", "10");   // Minor version
     // 0.45v
     defineMacro("__x86_16__", "1");
 

@@ -20,6 +20,6 @@
 }
 
 [[naked]] void pad() {
-    __asm("times 510 - ($ - $$) db 0");
-    __asm("dw 0xAA55");
+    __asm("#times (510 - $) #db 0");
+    __asm("#dw 0xAA55");
 }

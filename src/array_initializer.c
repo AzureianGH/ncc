@@ -102,7 +102,7 @@ void writeArrayWithInitializers(FILE* outFile, const char* arrayName, int arrayS
     
     // Fill remaining array elements with zeros if needed
     if (count < arraySize) {
-        fprintf(outFile, "    times %d %s 0\n", arraySize - count, directive);
+        fprintf(outFile, "    #times %d %s 0\n", arraySize - count, directive);
     }
 }
 
