@@ -133,12 +133,12 @@ int main(int argc, char* argv[]) {
             return 0;
         } else if (strcmp(argv[i], "--version") == 0) {
             #ifdef _WIN32
-            printf("ncc [ncc-win-x64] ntos(6.2025.1.1) - 1.10\n");
+            printf("ncc [ncc-win-x64] ntos(6.2025.1.4) - 1.48\n");
             printf("Copyright (C) 2025 Nathan's Compiler Collection\n");
             printf("This is free software; see the source for copying conditions.  There is NO\n");
             printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n");
             #else
-            printf("ncc [ncc-linux-x64] any-linux(6.2025.1.1) - 1.10\n");
+            printf("ncc [ncc-linux-x64] any-linux(6.2025.1.4) - 1.48\n");
             printf("Copyright (C) 2025 Nathan's Compiler Collection\n");
             printf("This is free software; see the source for copying conditions.  There is NO\n");
             printf("warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\r");
