@@ -32,16 +32,18 @@ const char* getNodeTypeName(NodeType type) {
         case NODE_BINARY_OP: return "BINARY_OP";
         case NODE_UNARY_OP: return "UNARY_OP";
         case NODE_IDENTIFIER: return "IDENTIFIER";
+        
         case NODE_LITERAL: return "LITERAL";
         case NODE_RETURN: return "RETURN";
         case NODE_IF: return "IF";
         case NODE_WHILE: return "WHILE";
         case NODE_FOR: return "FOR";
-        case NODE_CALL: return "CALL";
-        case NODE_ASM_BLOCK: return "ASM_BLOCK";
+        case NODE_CALL: return "CALL";        case NODE_ASM_BLOCK: return "ASM_BLOCK";
         case NODE_ASM: return "ASM";
         case NODE_EXPRESSION: return "EXPRESSION";
         case NODE_TERNARY: return "TERNARY";
+        case NODE_BREAK: return "BREAK";
+        case NODE_CONTINUE: return "CONTINUE";
         default: return "UNKNOWN";
     }
 }
@@ -135,8 +137,7 @@ void printAST(ASTNode* node, int indent) {
         default:
             break;
     }
-    
-    printf("\n");
+      printf("\n");
     
     // Print children
     if (node->left) {
@@ -146,10 +147,8 @@ void printAST(ASTNode* node, int indent) {
         printAST(node->right, indent + 1);
     }
     
-    // Print linked list nodes
-    ASTNode* next = node->next;
-    while (next) {
-        printAST(next, indent);
-        next = next->next;
+    // Print next node in the sequence (for lists of declarations, statements, etc.)
+    if (node->next) {
+        printAST(node->next, indent);
     }
 }

@@ -10,7 +10,9 @@ extern char* currentFunction;
 extern char* generateLabel(const char* prefix);
 extern void generateStatement(ASTNode* node);
 extern void generateExpression(ASTNode* node);
-extern void generateBlock(ASTNode* node);  // Add forward declaration for blocks
+extern void generateBlock(ASTNode* node);
+extern void pushLoopContext(const char* continueLabel, const char* breakLabel);
+extern void popLoopContext();
 
 // Generate code for a for loop
 void generateForLoop(ASTNode* node) {
@@ -29,10 +31,13 @@ void generateForLoop(ASTNode* node) {
         fprintf(asmFile, "    ; For loop initialization\n");
         generateStatement(node->for_loop.init);
     }
-    
-    // Jump to condition check
+      // Jump to condition check
     fprintf(asmFile, "    jmp %s\n", condLabel);
-      // Start of the loop body
+    
+    // Push loop context for break/continue statements
+    pushLoopContext(updateLabel, endLabel);
+    
+    // Start of the loop body
     fprintf(asmFile, "%s:\n", startLabel);
     
     // Generate code for the loop body
@@ -66,9 +71,11 @@ void generateForLoop(ASTNode* node) {
         // No condition means always loop
         fprintf(asmFile, "    jmp %s ; Unconditional loop\n", startLabel);
     }
-    
-    // End of the loop
+      // End of the loop
     fprintf(asmFile, "%s:\n", endLabel);
+    
+    // Pop loop context
+    popLoopContext();
     
     // Free the labels
     free(startLabel);

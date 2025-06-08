@@ -10,6 +10,8 @@ extern char* generateLabel(const char* prefix);
 extern void generateStatement(ASTNode* node);
 extern void generateExpression(ASTNode* node);
 extern void generateBlock(ASTNode* node);
+extern void pushLoopContext(const char* continueLabel, const char* breakLabel);
+extern void popLoopContext();
 
 // Generate code for a do-while loop
 void generateDoWhileLoop(ASTNode* node) {
@@ -19,10 +21,12 @@ void generateDoWhileLoop(ASTNode* node) {
     char* bodyLabel = generateLabel("do_body");
     char* condLabel = generateLabel("do_cond");
     char* endLabel = generateLabel("do_end");
-    
-    // Start with loop body
+      // Start with loop body
     fprintf(asmFile, "    ; Do-while loop\n");
     fprintf(asmFile, "%s:\n", bodyLabel);
+    
+    // Push loop context for break/continue statements
+    pushLoopContext(condLabel, endLabel);
     
     // Generate loop body
     if (node->do_while_loop.body) {
@@ -47,7 +51,14 @@ void generateDoWhileLoop(ASTNode* node) {
         fprintf(asmFile, "    test ax, ax\n");
         fprintf(asmFile, "    jnz %s\n", bodyLabel);
     }
-    
-    // End of loop
+      // End of loop
     fprintf(asmFile, "%s:\n", endLabel);
+    
+    // Pop loop context
+    popLoopContext();
+    
+    // Free the allocated labels
+    free(bodyLabel);
+    free(condLabel);
+    free(endLabel);
 }

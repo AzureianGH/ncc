@@ -11,9 +11,14 @@
 #include <string.h>
 #include <ctype.h>
 
+
 // External declarations from type_checker.c
 extern TypeInfo* getTypeInfo(const char* name);
 extern TypeInfo* getTypeInfoFromExpression(ASTNode* expr);
+
+// Forward declarations
+void generateContinueStatement(ASTNode* node);
+void generateBreakStatement(ASTNode* node);
 
 // Define the optimization state
 OptimizationState optimizationState = {
@@ -73,6 +78,47 @@ static int stackSize = 0;
 
 // Origin address for ORG directive
 static unsigned int originAddress = 0;
+
+// Loop context tracking for break/continue statements
+#define MAX_LOOP_NESTING 16
+typedef struct {
+    char* continueLabel;  // Label to jump to for continue
+    char* breakLabel;     // Label to jump to for break
+} LoopContext;
+
+static LoopContext loopStack[MAX_LOOP_NESTING];
+static int loopStackDepth = 0;
+
+// Push a new loop context onto the stack
+void pushLoopContext(const char* continueLabel, const char* breakLabel) {
+    if (loopStackDepth >= MAX_LOOP_NESTING) {
+        reportError(-1, "Maximum loop nesting depth exceeded");
+        return;
+    }
+    
+    loopStack[loopStackDepth].continueLabel = strdup(continueLabel);
+    loopStack[loopStackDepth].breakLabel = strdup(breakLabel);
+    loopStackDepth++;
+}
+
+// Pop the current loop context from the stack
+void popLoopContext() {
+    if (loopStackDepth > 0) {
+        loopStackDepth--;
+        free(loopStack[loopStackDepth].continueLabel);
+        free(loopStack[loopStackDepth].breakLabel);
+        loopStack[loopStackDepth].continueLabel = NULL;
+        loopStack[loopStackDepth].breakLabel = NULL;
+    }
+}
+
+// Get the current loop context (for break/continue)
+LoopContext* getCurrentLoopContext() {
+    if (loopStackDepth > 0) {
+        return &loopStack[loopStackDepth - 1];
+    }
+    return NULL;
+}
 
 // Get the current name of the function being generated
 const char* getCurrentFunctionName() {
@@ -562,10 +608,9 @@ void generateFunction(ASTNode* node) {
     }
     
     // Generate function exit label
-    fprintf(asmFile, "\n_%s_exit:\n", funcName);
-      // Function epilogue
+    fprintf(asmFile, "\n_%s_exit:\n", funcName);    // Function epilogue
     if (node->function.info.is_naked) {
-        fprintf(asmFile, "    ; Naked function - no epilogue generated\n");
+        fprintf(asmFile, "    ; Naked function - no epilogue generated");
         // No ret instruction for naked functions - user must provide it
     }
     else if (node->function.info.is_stackframe) {
@@ -584,13 +629,14 @@ void generateFunction(ASTNode* node) {
         fprintf(asmFile, "    pop bx\n");
         fprintf(asmFile, "    pop bp\n");
         fprintf(asmFile, "    ret\n");
+        fprintf(asmFile, "\n");
     } else {
         fprintf(asmFile, "    ; Standard function epilogue\n");
         fprintf(asmFile, "    mov sp, bp\n");
         fprintf(asmFile, "    pop bp\n");
         fprintf(asmFile, "    ret\n");
+        fprintf(asmFile, "\n");
     }
-      fprintf(asmFile, "\n");
     
     currentFunction = NULL;
     currentFunctionIsNaked = 0;
@@ -831,9 +877,16 @@ void generateStatement(ASTNode* node) {
         case NODE_DO_WHILE:
             generateDoWhileLoop(node);
             break;
-            
-        case NODE_IF:
+              case NODE_IF:
             generateIfStatement(node);
+            break;
+            
+        case NODE_BREAK:
+            generateBreakStatement(node);
+            break;
+            
+        case NODE_CONTINUE:
+            generateContinueStatement(node);
             break;
               default:
             reportWarning(-1, "Unsupported statement type: %d", node->type);
@@ -1843,14 +1896,41 @@ void generateReturnStatement(ASTNode* node) {
             fprintf(asmFile, "    ; Return value in AX\n");
         }
     }
-    
-    // For naked functions, don't generate automatic control flow
+      // For naked functions, don't generate automatic control flow
     if (!currentFunctionIsNaked) {
         // Jump to function epilogue
         fprintf(asmFile, "    jmp _%s_exit\n", currentFunction);
     } else {
         fprintf(asmFile, "    ; Naked function - no automatic jump to epilogue generated\n");
     }
+}
+
+// Generate code for a break statement
+void generateBreakStatement(ASTNode* node) {
+    if (!node || node->type != NODE_BREAK) return;
+    
+    LoopContext* context = getCurrentLoopContext();
+    if (!context) {
+        reportError(-1, "break statement not within a loop");
+        return;
+    }
+    
+    fprintf(asmFile, "    ; Break statement\n");
+    fprintf(asmFile, "    jmp %s ; Jump to end of loop\n", context->breakLabel);
+}
+
+// Generate code for a continue statement
+void generateContinueStatement(ASTNode* node) {
+    if (!node || node->type != NODE_CONTINUE) return;
+    
+    LoopContext* context = getCurrentLoopContext();
+    if (!context) {
+        reportError(-1, "continue statement not within a loop");
+        return;
+    }
+    
+    fprintf(asmFile, "    ; Continue statement\n");
+    fprintf(asmFile, "    jmp %s ; Jump to loop condition/update\n", context->continueLabel);
 }
 
 // Generate code for an inline assembly block

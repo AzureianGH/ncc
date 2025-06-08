@@ -29,7 +29,9 @@ typedef enum {    NODE_PROGRAM,      // Program root
     NODE_UNARY_OP,     // Unary operation
     NODE_IDENTIFIER,   // Variable identifier
     NODE_LITERAL,      // Constant literal
-    NODE_RETURN,       // Return statement
+      NODE_RETURN,       // Return statement
+    NODE_BREAK,        // Break statement  
+    NODE_CONTINUE,     // Continue statement
     NODE_IF,           // If statement
     NODE_WHILE,        // While loop
     NODE_DO_WHILE,     // Do-while loop
