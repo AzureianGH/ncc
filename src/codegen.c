@@ -11,6 +11,9 @@
 #include <string.h>
 #include <ctype.h>
 
+#if __linux__
+#define strdup strdupc
+#endif
 
 // External declarations from type_checker.c
 extern TypeInfo* getTypeInfo(const char* name);
