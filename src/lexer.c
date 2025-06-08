@@ -96,8 +96,10 @@ static int isKeyword(const char* str) {
     if (strcmp(str, "else") == 0) return TOKEN_ELSE;    
     if (strcmp(str, "while") == 0) return TOKEN_WHILE;
     if (strcmp(str, "do") == 0) return TOKEN_DO;
-    if (strcmp(str, "for") == 0) return TOKEN_FOR;
+      if (strcmp(str, "for") == 0) return TOKEN_FOR;
     if (strcmp(str, "return") == 0) return TOKEN_RETURN;
+    if (strcmp(str, "break") == 0) return TOKEN_BREAK;
+    if (strcmp(str, "continue") == 0) return TOKEN_CONTINUE;
     if (strcmp(str, "bool") == 0) return TOKEN_BOOL;
     if (strcmp(str, "true") == 0) return TOKEN_TRUE;
     if (strcmp(str, "false") == 0) return TOKEN_FALSE;
@@ -221,12 +223,12 @@ Token getNextToken() {
         if (source[position] == '\\') {
             position++;
             column++;
-            
-            // Process escape sequences
+              // Process escape sequences
             switch (source[position]) {
                 case 'n':  charValue = '\n'; break;
                 case 't':  charValue = '\t'; break;
                 case 'r':  charValue = '\r'; break;
+                case 'b':  charValue = '\b'; break;
                 case '0':  charValue = '\0'; break;
                 case '\\': charValue = '\\'; break;
                 case '\'': charValue = '\''; break;

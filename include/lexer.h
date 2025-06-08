@@ -26,8 +26,10 @@ typedef enum {
     TOKEN_ELSE,
     TOKEN_WHILE,
     TOKEN_DO,            // do
-    TOKEN_FOR,
-    TOKEN_RETURN,    
+      TOKEN_FOR,
+    TOKEN_RETURN,
+    TOKEN_BREAK,         // break
+    TOKEN_CONTINUE,      // continue
     TOKEN_BOOL,          // bool (C23)
     TOKEN_TRUE,          // true (C23)
     TOKEN_FALSE,         // false (C23)    

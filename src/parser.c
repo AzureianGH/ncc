@@ -556,10 +556,16 @@ ASTNode* parseStatement() {
         return parseDoWhileStatement();
     }else if (tokenIs(TOKEN_FOR)) {
         // For statement
-        return parseForStatement();
-    } else if (tokenIs(TOKEN_RETURN)) {
+        return parseForStatement();    } else if (tokenIs(TOKEN_RETURN)) {
         // Return statement
-        return parseReturnStatement();    } else if (tokenIs(TOKEN_ASM)) {
+        return parseReturnStatement();
+    } else if (tokenIs(TOKEN_BREAK)) {
+        // Break statement
+        return parseBreakStatement();
+    } else if (tokenIs(TOKEN_CONTINUE)) {
+        // Continue statement  
+        return parseContinueStatement();
+    } else if (tokenIs(TOKEN_ASM)) {
         // Inline assembly
         return parseInlineAssembly();    } else if (tokenIs(TOKEN_STATIC) || tokenIs(TOKEN_INT) || tokenIs(TOKEN_SHORT) || 
                tokenIs(TOKEN_CHAR) || tokenIs(TOKEN_VOID) || tokenIs(TOKEN_UNSIGNED)) {
@@ -589,6 +595,26 @@ ASTNode* parseReturnStatement() {
     }
     
     expect(TOKEN_SEMICOLON);
+    return node;
+}
+
+// Parse a break statement
+ASTNode* parseBreakStatement() {
+    ASTNode* node = createNode(NODE_BREAK);
+    
+    consume(TOKEN_BREAK);
+    expect(TOKEN_SEMICOLON);
+    
+    return node;
+}
+
+// Parse a continue statement
+ASTNode* parseContinueStatement() {
+    ASTNode* node = createNode(NODE_CONTINUE);
+    
+    consume(TOKEN_CONTINUE);
+    expect(TOKEN_SEMICOLON);
+    
     return node;
 }
 

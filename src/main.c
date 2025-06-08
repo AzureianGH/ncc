@@ -235,13 +235,31 @@ int main(int argc, char* argv[]) {
         char* exeDir = getExecutableDir();
         
 #ifdef _WIN32
-        snprintf(command, sizeof(command),
+        if (debugMode)
+        {
+            snprintf(command, sizeof(command),
+            "cmd /C \"\"%s%ctooling%cnas.exe\" -m16 -v -f bin temp.asm -o \"%s\"\"",
+            exeDir, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
+        }
+        else
+        {
+            snprintf(command, sizeof(command),
             "cmd /C \"\"%s%ctooling%cnas.exe\" -m16 -f bin temp.asm -o \"%s\"\"",
             exeDir, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
+        }
 #else
-        snprintf(command, sizeof(command),
+        if (debugMode)
+        {
+            snprintf(command, sizeof(command),
+                    "\"%s%ctooling%cnas\" -m16 -v -f bin temp.asm -o \"%s\"",
+                    exeDir, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
+        }
+        else
+        {
+            snprintf(command, sizeof(command),
                     "\"%s%ctooling%cnas\" -m16 -f bin temp.asm -o \"%s\"",
                     exeDir, PATH_SEPARATOR, PATH_SEPARATOR, outputFile);
+        }
 #endif
 
         int result = system(command);

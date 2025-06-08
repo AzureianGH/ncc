@@ -5,25 +5,33 @@
 
 [[naked]] void _KERNEL_START() {}
 
-void _after_diskload() {
+void _after_diskload()
+{
     clearScreen();
     initUart();
     writeLog("UART initialized.\r\n", 0);
     writeLog("NCC Bootloader loaded in at (", 2);
     writeDebug(stoa_hex(seconds));
     writeDebug(":8000)\r\n");
+    writeLog("Setting GDT...\r\n", 2);
+    setGDT();
+    writeLog("GDT set.\r\n", 0);
     writeLog("Installing INTs...\r\n", 2);
     installIRQS();
     initPIT();
     writeLog("PIT initialized.\r\n", 0);
-    
-    writeDebug("NCC Version: ");
-    writeDebug(stoa_hex(__NCC_MAJOR__));
-    writeDebug(".");
-    writeDebug(stoa_hex(__NCC_MINOR__));
-    writeDebug("\r\n");
+
+    while (true)
+    {
+        writeDebug("shell > ");
+        char* string = getString(true);
+        writeLog("You entered: ", 2);
+        writeDebug(string);
+        writeDebug("\r\n"); 
+    }
     haltForever();
 }
+
 
 void clearScreen()
 {
@@ -34,9 +42,9 @@ void clearScreen()
 [[deprecated("This function will be removed soon."), naked]]
 void haltForever()
 {
-    writeLog("HELP ME PLEASE IT BURNS OH GOD... System halted.\r\n", 1);
     __asm("cli");
-    while (true) {
+    while (true)
+    {
         __asm("hlt");
     }
 }
@@ -44,20 +52,103 @@ void haltForever()
 void writeChar(char c)
 {
     __asm("mov al, [bp+4]"); // Get character from stack
-    __asm("mov ah, 0x0E"); // BIOS teletype function
+    __asm("mov ah, 0x0E");   // BIOS teletype function
     __asm("mov bx, 0x0007"); // Attribute (light gray on black)
     __asm("int 0x10");       // BIOS interrupt to write character
 }
 
-void writeString(char* str)
+uint16_t getChar()
 {
-    while (*str) writeChar(*str++);
+    __asm("mov ah, 0x00"); // BIOS keyboard read function
+    __asm("int 0x16");     // BIOS interrupt to read character
+    // AL = ASCII code
+    // AH = Scan code
 }
 
-void writeDebug(char* str)
+[[naked]] char getCharLetter()
+{
+    __asm("mov ah, 0x00"); // BIOS keyboard read function
+    __asm("int 0x16");     // BIOS interrupt to read character
+    __asm("mov bl, al");
+    __asm("xor ax, ax");
+    __asm("mov al, bl"); // Move ASCII code to AH for output
+    __asm("ret");        // Return to caller
+}
+
+char *getString(bool newline)
+{
+    char buffer[256]; // Buffer for input string
+    char *ptr = buffer;
+
+    //clear buffer
+    for (int i = 0; i < sizeof(buffer); i++)
+    {
+        buffer[i] = '\0'; // Initialize buffer to null characters
+    }
+    char c;
+
+    while (true)
+    {
+        c = getCharLetter();
+        if (c == '\r')
+        {                // Enter key
+            *ptr = '\0'; // Null-terminate the string
+            break;
+        }
+        else if (c == '\b') // Backspace or Delete
+        { // Backspace
+            if (ptr > buffer)
+            { // Only remove if there's something to remove
+                ptr--; // Move pointer back
+                writeChar('\b'); // Echo backspace character
+                writeChar(' ');  // Overwrite with space
+                writeChar('\b'); // Move back again
+            }
+        }
+        else if (c == 0x1B) // Escape key
+        {
+            *ptr = '\0'; // Null-terminate the string
+            break;       // Exit input loop
+        }
+        else
+        {
+            //only allow printable characters
+            if (c >= 32 && c <= 126) // Printable ASCII range
+            {
+                *ptr++ = c; // Add character to buffer
+                writeChar(c); // Echo character to screen
+                if (ptr >= buffer + sizeof(buffer) - 1)
+                { // Prevent buffer overflow
+                    break;
+                }
+            }
+            char* btoathing = btoa_hex(c);
+            writeUartString(btoathing); // Send character to UART
+        }
+    }
+    if (newline)
+    {
+        writeDebug("\r\n"); // Write newline to UART
+    }
+    return buffer; // Return the input string
+}
+
+void writeString(char *str)
+{
+    while (*str)
+        writeChar(*str++);
+}
+
+void writeDebug(char *str)
 {
     writeString(str);
     writeUartString(str);
+}
+
+[[naked]] void softReset()
+{
+    __asm("cli");
+    __asm("jmp 0xFFFF:0x0000");
 }
 
 void writeFarPtr(unsigned short seg, unsigned short offset, unsigned char byte)
@@ -77,7 +168,7 @@ unsigned char readFarPtr(unsigned short seg, unsigned short offset)
     __asm("mov es, %0" : : "r"(seg));
     __asm("mov di, %0" : : "r"(offset));
     __asm("xor ax, ax");
-    __asm("mov %0, [es:di]" : : "=q"(byte)); 
+    __asm("mov %0, [es:di]" : : "=q"(byte));
     __asm("pop es");
     return byte;
 }
@@ -101,7 +192,7 @@ unsigned char readPtr(char ptr)
 void enterVGAGraphicsMode()
 {
     __asm("mov ax, 0x13"); // Set video mode 13h (320x200, 256 colors)
-    __asm("int 0x10");       // BIOS interrupt to set video mode
+    __asm("int 0x10");     // BIOS interrupt to set video mode
 }
 
 void clearVGAScreen(char c)
@@ -116,8 +207,10 @@ void drawPixel(unsigned short x, unsigned short y, unsigned char color)
 
 void drawRect(unsigned short x, unsigned short y, unsigned short width, unsigned short height, unsigned char color)
 {
-    for (unsigned short i = 0; i < height; i++) {
-        for (unsigned short j = 0; j < width; j++) {
+    for (unsigned short i = 0; i < height; i++)
+    {
+        for (unsigned short j = 0; j < width; j++)
+        {
             drawPixel(x + j, y + i, color);
         }
     }
@@ -131,76 +224,97 @@ void memset_far(unsigned short seg, unsigned short offset, unsigned char value, 
     __asm("mov di, %0" : : "r"(offset));
     __asm("mov cx, %0" : : "r"(size));
     __asm("xor ax, ax");
-    __asm("mov al, %0" : : "q"(value));  // Use the constraint system properly
+    __asm("mov al, %0" : : "q"(value)); // Use the constraint system properly
     __asm("rep stosb");
 
     setESSegment(old_seg);
 }
 
-static char hex_buffer[5]; // 4 hex digits + null terminator
+static char btoa_hex_buffer[3]; // 2 hex digits + null terminator
 
-char* stoa_hex(unsigned short i)
+char* btoa_hex(unsigned char i)
 {
+
     // Disable interrupts while we're creating the string
     __asm("cli");
-    
+
     // Convert each nibble to a hex digit
     unsigned char digit;
-    
-    digit = (i >> 12) & 0xF;
-    hex_buffer[0] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
-    
-    digit = (i >> 8) & 0xF;
-    hex_buffer[1] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
-    
+
     digit = (i >> 4) & 0xF;
-    hex_buffer[2] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
-    
+    btoa_hex_buffer[0] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+
     digit = i & 0xF;
-    hex_buffer[3] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
-    
-    hex_buffer[4] = '\0';
-    
+    btoa_hex_buffer[1] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+
+    btoa_hex_buffer[2] = '\0';
+
     // Re-enable interrupts
     __asm("sti");
-    
-    return hex_buffer;
+
+    return btoa_hex_buffer;
 }
 
-// Buffer for stoa_dec to return
-static char dec_buffer[6]; // 5 digits + null terminator
+static char shex_buffer[5]; // 4 hex digits + null terminator
 
-char* stoa_dec(unsigned short i)
+char *stoa_hex(unsigned short i)
 {
     // Disable interrupts while we're creating the string
     __asm("cli");
-    
+
+    // Convert each nibble to a hex digit
     unsigned char digit;
-    
-    digit = (i / 10000) % 10;
-    dec_buffer[0] = '0' + digit;
-    
-    digit = (i / 1000) % 10;
-    dec_buffer[1] = '0' + digit;
-    
-    digit = (i / 100) % 10;
-    dec_buffer[2] = '0' + digit;
-    
-    digit = (i / 10) % 10;
-    dec_buffer[3] = '0' + digit;
-    
-    digit = i % 10;
-    dec_buffer[4] = '0' + digit;
-    
-    dec_buffer[5] = '\0';
-    
+
+    digit = (i >> 12) & 0xF;
+    shex_buffer[0] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+
+    digit = (i >> 8) & 0xF;
+    shex_buffer[1] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+
+    digit = (i >> 4) & 0xF;
+    shex_buffer[2] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+
+    digit = i & 0xF;
+    shex_buffer[3] = (digit < 10) ? ('0' + digit) : ('A' + digit - 10);
+
+    shex_buffer[4] = '\0';
+
     // Re-enable interrupts
     __asm("sti");
-    
-    return dec_buffer;
+
+    return shex_buffer;
 }
 
+[[naked]] void __GDT()
+{
+    __asm("gdt_start:");
 
+    __asm("#dw 0x0000");
+    __asm("#dw 0x0000");
+    __asm("#dw 0x0000");
+
+    __asm("#dw 0xFFFF");
+    __asm("#dw 0x0000");
+    __asm("#dw 0x9A00");
+    __asm("#dw 0xCF00");
+
+    __asm("#dw 0xFFFF");
+    __asm("#dw 0x0000");
+    __asm("#dw 0x9200");
+    __asm("#dw 0xCF00");
+
+    __asm("gdt_end:");
+
+    __asm("gdt_descriptor:");
+    __asm("#dw gdt_end - gdt_start - 1");
+    __asm("#dd gdt_start");
+}
+
+[[naked]] void setGDT()
+{
+    __asm("lgdt [gdt_descriptor]");
+    __asm("ret");
+}
 
 void setESSegment(unsigned int es)
 {
@@ -226,7 +340,7 @@ uint16_t getCS()
 void initUart()
 {
     __asm("mov dx, 0x3F8"); // COM1 port
-    __asm("mov al, 0x80"); // Enable DLAB (Divisor Latch Access Bit)
+    __asm("mov al, 0x80");  // Enable DLAB (Divisor Latch Access Bit)
     __asm("out dx, al");
     __asm("mov al, 0x03"); // Set baud rate to 9600 (divisor = 3)
     __asm("out dx, al");
@@ -240,33 +354,44 @@ void initUart()
 
 void writeUart(char c)
 {
-    __asm("mov dx, 0x3F8"); // COM1 port
+    __asm("mov dx, 0x3F8");  // COM1 port
     __asm("mov al, [bp+4]"); // Get character from stack
     __asm("out dx, al");
 }
 
-void writeUartString(char* str)
+void writeUartString(char *str)
 {
-    while (*str) {
+    while (*str)
+    {
         writeUart(*str++);
     }
 }
 
-void writeLog(char* str, unsigned char level)
+void writeLog(char *str, unsigned char level)
 {
-    char* prefix = NULL;
-    if (level == 0) {
+    char *prefix = NULL;
+    if (level == 0)
+    {
         prefix = "[OKAY] ";
-    } else if (level == 1) {
+    }
+    else if (level == 1)
+    {
         prefix = "[FAIL] ";
-    } else if (level == 2) {
+    }
+    else if (level == 2)
+    {
         prefix = "[INFO] ";
-    } else if (level == 3) {
+    }
+    else if (level == 3)
+    {
         prefix = "[WARN] ";
-    } else {
+    }
+    else
+    {
         prefix = "[UNKW] ";
     }
-    if (prefix) {
+    if (prefix)
+    {
         writeString(prefix);
         writeUartString(prefix);
     }
@@ -291,16 +416,15 @@ unsigned char inb(unsigned short port)
     return value;
 }
 
-
 void initPIT()
 {
     __asm("cli");
-    //1193182 / 1000 = 1193
-    outb(0x43, 0x34); // Set mode 2 (rate generator)
-    outb(0x40, 1193 & 0xFF); // Set low byte
+    // 1193182 / 1000 = 1193
+    outb(0x43, 0x34);               // Set mode 2 (rate generator)
+    outb(0x40, 1193 & 0xFF);        // Set low byte
     outb(0x40, (1193 >> 8) & 0xFF); // Set high byte
-    outb(0x20, 0x20); // Send EOI to PIC
-    outb(0xA0, 0x20); // Send EOI to slave PIC
+    outb(0x20, 0x20);               // Send EOI to PIC
+    outb(0xA0, 0x20);               // Send EOI to slave PIC
     __asm("sti");
 }
 
@@ -330,9 +454,9 @@ void installIRQS()
     __asm("push es");
     __asm("mov ax, 0x0000");
     __asm("mov es, ax");
-    __asm("mov di, 0x20");       // 4 * 0x08 = 0x20
-    __asm("mov [es:di], cx");      // Offset first
-    __asm("mov [es:di+2], bx");    // Segment next
+    __asm("mov di, 0x20");      // 4 * 0x08 = 0x20
+    __asm("mov [es:di], cx");   // Offset first
+    __asm("mov [es:di+2], bx"); // Segment next
     __asm("pop es");
     __asm("popa");
     __asm("sti");
@@ -356,8 +480,8 @@ void setTick(uint16_t t)
     tick = t;
 }
 
-
-[[naked]] void irq0_handler() {
+[[naked]] void irq0_handler()
+{
     __asm("cli");
     __asm("pusha");
 
@@ -367,10 +491,9 @@ void setTick(uint16_t t)
     __asm("jne _irq0_handler_end");
 
     __asm("mov word [cs:_kernel_tick], 0x0000"); // Reset tick to 0
-    __asm("inc word [cs:_kernel_seconds]"); // Increment seconds
+    __asm("inc word [cs:_kernel_seconds]");      // Increment seconds
 
     __asm("_irq0_handler_end:");
-
 
     __asm("popa");
     __asm("mov al, 0x20");

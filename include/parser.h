@@ -34,6 +34,12 @@ ASTNode* parseExpressionStatement();
 // Parse a return statement
 ASTNode* parseReturnStatement();
 
+// Parse a break statement
+ASTNode* parseBreakStatement();
+
+// Parse a continue statement
+ASTNode* parseContinueStatement();
+
 // Parse a for statement
 ASTNode* parseForStatement();
 

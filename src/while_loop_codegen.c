@@ -9,7 +9,9 @@ extern FILE* asmFile;
 extern char* generateLabel(const char* prefix);
 extern void generateStatement(ASTNode* node);
 extern void generateExpression(ASTNode* node);
-extern void generateBlock(ASTNode* node);  // Add forward declaration for blocks
+extern void generateBlock(ASTNode* node);
+extern void pushLoopContext(const char* continueLabel, const char* breakLabel);
+extern void popLoopContext();
 
 // Generate code for a while loop
 void generateWhileLoop(ASTNode* node) {
@@ -19,10 +21,12 @@ void generateWhileLoop(ASTNode* node) {
     char* condLabel = generateLabel("while_cond");
     char* bodyLabel = generateLabel("while_body");
     char* endLabel = generateLabel("while_end");
-    
-    // Start with condition check
+      // Start with condition check
     fprintf(asmFile, "    ; While loop\n");
     fprintf(asmFile, "%s:\n", condLabel);
+    
+    // Push loop context for break/continue statements
+    pushLoopContext(condLabel, endLabel);
       
     // Generate condition evaluation
     if (node->while_loop.condition) {
@@ -47,10 +51,17 @@ void generateWhileLoop(ASTNode* node) {
     } else {
         fprintf(asmFile, "    ; Warning: Empty loop body\n");
     }
-    
-    // Jump back to condition after loop body execution
+      // Jump back to condition after loop body execution
     fprintf(asmFile, "    jmp %s\n", condLabel);
     
     // End of loop
     fprintf(asmFile, "%s:\n", endLabel);
+    
+    // Pop loop context
+    popLoopContext();
+    
+    // Free the allocated labels
+    free(condLabel);
+    free(bodyLabel);
+    free(endLabel);
 }

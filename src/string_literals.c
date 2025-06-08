@@ -59,11 +59,11 @@ char* escapeStringForAsm(const char* input) {
             case '\\':
                 // Handle escape sequences
                 i++;
-                if (i < len) {
-                    switch (input[i]) {
+                if (i < len) {                    switch (input[i]) {
                         case 'n': output[j++] = 10; break;  // Newline
                         case 'r': output[j++] = 13; break;  // Carriage return
                         case 't': output[j++] = 9; break;   // Tab
+                        case 'b': output[j++] = 8; break;   // Backspace
                         case '0': output[j++] = 0; break;   // Null
                         case '\\': output[j++] = '\\'; break; // Backslash
                         case '\"': output[j++] = '\"'; break; // Quote
