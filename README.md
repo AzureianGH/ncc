@@ -189,7 +189,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for detailed contribution guidelines.
 
 ## License
 
-NCC is designed for educational and retro computing purposes. See the individual source files for specific licensing information.
+NCC is designed for educational and retro computing purposes. NCC is licensed under the MIT license. See here: https://opensource.org/license/mit
 
 ## System Requirements
 
