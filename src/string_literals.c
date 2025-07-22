@@ -36,7 +36,7 @@ char* getSanitizedFilenamePrefix() {
     
     // Replace invalid characters with underscore
     for (char* c = prefix; *c; c++) {
-        if (!isalnum(*c) && *c != '_') {
+        if (!isalnum((int)*c) && *c != '_') {
             *c = '_';
         }
     }

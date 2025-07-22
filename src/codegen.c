@@ -1,3 +1,6 @@
+/* enables `strdup(3)` on Cygwin, probably other systems */
+#define _GNU_SOURCE 1
+
 #include "codegen.h"
 #include "ast.h"
 #include "string_literals.h"
@@ -10,10 +13,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-
-#if __linux__
-#define strdup strdupc
-#endif
 
 // External declarations from type_checker.c
 extern TypeInfo* getTypeInfo(const char* name);
@@ -530,7 +529,7 @@ void generateFunction(ASTNode* node) {
         
         // Replace invalid characters with underscore
         for (char* c = prefix; *c; c++) {
-            if (!isalnum(*c) && *c != '_') {
+            if (!isalnum((int)*c) && *c != '_') {
                 *c = '_';
             }
         }
@@ -687,7 +686,7 @@ void generateStatement(ASTNode* node) {
                         char* dot = strrchr(prefix, '.');
                         if (dot) *dot = '\0';
                         for (char* c = prefix; *c; c++) {
-                            if (!isalnum(*c) && *c != '_') {
+                            if (!isalnum((int)*c) && *c != '_') {
                                 *c = '_';
                             }
                         }
@@ -790,7 +789,7 @@ void generateStatement(ASTNode* node) {
                         char* dot = strrchr(prefix, '.');
                         if (dot) *dot = '\0';
                         for (char* c = prefix; *c; c++) {
-                            if (!isalnum(*c) && *c != '_') {
+                            if (!isalnum((int)*c) && *c != '_') {
                                 *c = '_';
                             }
                         }
@@ -934,7 +933,7 @@ void generateVariableDeclaration(ASTNode* node) {
             char* dot = strrchr(prefix, '.');
             if (dot) *dot = '\0';
             for (char* c = prefix; *c; c++) {
-                if (!isalnum(*c) && *c != '_') {
+                if (!isalnum((int)*c) && *c != '_') {
                     *c = '_';
                 }
             }
@@ -1226,7 +1225,7 @@ void generateExpression(ASTNode* node) {
                         char* dot = strrchr(prefix, '.');
                         if (dot) *dot = '\0';
                         for (char* c = prefix; *c; c++) {
-                            if (!isalnum(*c) && *c != '_') {
+                            if (!isalnum((int)*c) && *c != '_') {
                                 *c = '_';
                             }
                         }
@@ -1293,7 +1292,7 @@ void generateExpression(ASTNode* node) {
                     if (prefix) {
                         strcpy(prefix, filename);
                         char* dot = strrchr(prefix, '.'); if (dot) *dot = '\0';
-                        for (char* c = prefix; *c; c++) if (!isalnum(*c) && *c != '_') *c = '_';
+                        for (char* c = prefix; *c; c++) if (!isalnum((int)*c) && *c != '_') *c = '_';
                     }                    // Determine if this global is an array
                     TypeInfo* tinfo = getTypeInfo(node->identifier);
                     if (tinfo && tinfo->is_array) {

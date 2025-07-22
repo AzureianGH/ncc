@@ -137,10 +137,10 @@ static char* extractMacroName(const char* line, int* pos) {
     int len = 0;
     
     // Skip leading whitespace
-    while (isspace(line[*pos])) (*pos)++;
+    while (isspace((int)line[*pos])) (*pos)++;
     
     // Extract identifier (macro name)
-    while (isalnum(line[*pos]) || line[*pos] == '_') {
+    while (isalnum((int)line[*pos]) || line[*pos] == '_') {
         if (len < MAX_MACRO_NAME_LEN - 1) {
             buffer[len++] = line[*pos];
         }
@@ -157,7 +157,7 @@ static char* extractMacroValue(const char* line, int* pos) {
     int len = 0;
     
     // Skip leading whitespace
-    while (isspace(line[*pos])) (*pos)++;
+    while (isspace((int)line[*pos])) (*pos)++;
     
     // Extract the rest of the line as the value
     while (line[*pos] && line[*pos] != '\n' && line[*pos] != '\r') {
@@ -168,7 +168,7 @@ static char* extractMacroValue(const char* line, int* pos) {
     }
     
     // Remove trailing whitespace
-    while (len > 0 && isspace(buffer[len-1])) {
+    while (len > 0 && isspace((int)buffer[len-1])) {
         len--;
     }
     
@@ -264,7 +264,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
     pos++;
     
     // Skip any whitespace after the '#'
-    while (isspace(line[pos])) pos++;
+    while (isspace((int)line[pos])) pos++;
     
     // Debug output for directive processing
     #ifdef DEBUG_PREPROCESSOR
@@ -272,7 +272,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
     #endif
     
     // Determine directive type
-    if (strncmp(line + pos, "define", 6) == 0 && isspace(line[pos+6])) {
+    if (strncmp(line + pos, "define", 6) == 0 && isspace((int)line[pos+6])) {
         // #define directive
         pos += 6;  // Skip "define"
         
@@ -294,7 +294,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
             defineMacro(macroName, macroValue);
         }
     } 
-    else if (strncmp(line + pos, "undef", 5) == 0 && isspace(line[pos+5])) {
+    else if (strncmp(line + pos, "undef", 5) == 0 && isspace((int)line[pos+5])) {
         // #undef directive
         pos += 5;  // Skip "undef"
         
@@ -320,7 +320,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
             }
         }
     } 
-    else if (strncmp(line + pos, "ifdef", 5) == 0 && isspace(line[pos+5])) {
+    else if (strncmp(line + pos, "ifdef", 5) == 0 && isspace((int)line[pos+5])) {
         // #ifdef directive
         pos += 5;  // Skip "ifdef"
         (*ifLevel)++;
@@ -348,7 +348,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
             #endif
         }
     } 
-    else if (strncmp(line + pos, "ifndef", 6) == 0 && isspace(line[pos+6])) {
+    else if (strncmp(line + pos, "ifndef", 6) == 0 && isspace((int)line[pos+6])) {
         // #ifndef directive
         pos += 6;  // Skip "ifndef"
         (*ifLevel)++;
@@ -376,7 +376,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
             #endif
         }
     } 
-    else if (strncmp(line + pos, "if", 2) == 0 && isspace(line[pos+2])) {
+    else if (strncmp(line + pos, "if", 2) == 0 && isspace((int)line[pos+2])) {
         // #if directive
         pos += 2;  // Skip "if"
         (*ifLevel)++;
@@ -391,7 +391,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         }
         
         // Skip whitespace
-        while (isspace(line[pos])) pos++;
+        while (isspace((int)line[pos])) pos++;
         
         // Extract and evaluate the condition
         const char* expr = line + pos;
@@ -409,7 +409,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         }
     } 
     else if (strncmp(line + pos, "else", 4) == 0 && 
-             (isspace(line[pos+4]) || line[pos+4] == '\0' || line[pos+4] == '\n' || line[pos+4] == '\r')) {
+             (isspace((int)line[pos+4]) || line[pos+4] == '\0' || line[pos+4] == '\n' || line[pos+4] == '\r')) {
         // #else directive
         #ifdef DEBUG_PREPROCESSOR
         fprintf(stderr, "  Processing #else directive\n");
@@ -431,7 +431,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         }
     } 
     else if (strncmp(line + pos, "endif", 5) == 0 && 
-             (isspace(line[pos+5]) || line[pos+5] == '\0' || line[pos+5] == '\n' || line[pos+5] == '\r')) {
+             (isspace((int)line[pos+5]) || line[pos+5] == '\0' || line[pos+5] == '\n' || line[pos+5] == '\r')) {
         // #endif directive
         #ifdef DEBUG_PREPROCESSOR
         fprintf(stderr, "  Processing #endif (ifLevel=%d, skipLevel=%d)\n", *ifLevel, *skipLevel);
@@ -458,7 +458,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         fprintf(stderr, "  New ifLevel=%d, skipLevel=%d\n", *ifLevel, *skipLevel);
         #endif
     }
-    else if (strncmp(line + pos, "org", 3) == 0 && isspace(line[pos+3])) {
+    else if (strncmp(line + pos, "org", 3) == 0 && isspace((int)line[pos+3])) {
         // #org directive (custom extension to set origin address)
         pos += 3;  // Skip "org"
         
@@ -471,7 +471,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         }
         
         // Skip whitespace
-        while (isspace(line[pos])) pos++;
+        while (isspace((int)line[pos])) pos++;
         
         // Extract value (hexadecimal or decimal)
         char* orgValue = extractMacroValue(line, &pos);
@@ -483,7 +483,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         // Define a macro that can be used by code generator
         defineMacro("__ORG_ADDRESS__", orgValue);
     }
-    else if (strncmp(line + pos, "include", 7) == 0 && isspace(line[pos+7])) {
+    else if (strncmp(line + pos, "include", 7) == 0 && isspace((int)line[pos+7])) {
         // #include directive
         pos += 7;  // Skip "include"
         
@@ -496,7 +496,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         }
         
         // Skip whitespace
-        while (isspace(line[pos])) pos++;
+        while (isspace((int)line[pos])) pos++;
         
         // Determine include style (< > for system, " " for local)
         int isSystemHeader = 0;
@@ -561,7 +561,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         // by the calling function
         free(includedContent);
     }
-    else if (strncmp(line + pos, "pragma", 6) == 0 && isspace(line[pos+6])) {
+    else if (strncmp(line + pos, "pragma", 6) == 0 && isspace((int)line[pos+6])) {
         pos += 6;  // Skip "pragma"
         
         // Don't process if skipping code in a false condition block
@@ -573,7 +573,7 @@ static void processDirective(const char* line, int* ifLevel, int* skipLevel, con
         }
         
         // Skip whitespace
-        while (isspace(line[pos])) pos++;
+        while (isspace((int)line[pos])) pos++;
         
         // Check for "once" directive
         if (strncmp(line + pos, "once", 4) == 0) {
@@ -684,7 +684,7 @@ char* preprocessSource(const char* source) {
                 
                 // Gather the entire identifier
                 size_t j = i + 1;
-                while (source[j] && (isalnum(source[j]) || source[j] == '_')) {
+                while (source[j] && (isalnum((int)source[j]) || source[j] == '_')) {
                     if (identLen < MAX_MACRO_NAME_LEN - 1) {
                         identBuffer[identLen++] = source[j];
                     }

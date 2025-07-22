@@ -106,8 +106,8 @@ int main(int argc, char* argv[]) {
                 addIncludePath(argv[++i]);
             }
         } else if (strncmp(argv[i], "-O", 2) == 0) {
-            if (isdigit(argv[i][2])) optimizationLevel = argv[i][2] - '0';
-            else if (i + 1 < argc && isdigit(argv[i+1][0])) optimizationLevel = argv[++i][0] - '0';
+            if (isdigit((int)argv[i][2])) optimizationLevel = argv[i][2] - '0';
+            else if (i + 1 < argc && isdigit((int)argv[i+1][0])) optimizationLevel = argv[++i][0] - '0';
         } else if ((strcmp(argv[i], "-disp") == 0 || strcmp(argv[i], "-DISP") == 0) && i + 1 < argc) {
             originAddress = (unsigned int)strtoul(argv[++i], NULL, 0);
         } else if (strcmp(argv[i], "-com") == 0 || strcmp(argv[i], "-COM") == 0) {

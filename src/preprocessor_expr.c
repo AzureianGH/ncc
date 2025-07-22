@@ -12,7 +12,7 @@ static int evaluateFactor(const char** expr);
 
 // Skip whitespace in an expression
 static void skipWhitespace(const char** expr) {
-    while (**expr && isspace(**expr)) {
+    while (**expr && isspace((int)**expr)) {
         (*expr)++;
     }
 }
@@ -32,7 +32,7 @@ static int evaluateDefinedOperator(const char** expr) {
     char macroName[MAX_MACRO_NAME_LEN];
     int nameLen = 0;
     
-    while (**expr && (isalnum(**expr) || **expr == '_')) {
+    while (**expr && (isalnum((int)**expr) || **expr == '_')) {
         if (nameLen < MAX_MACRO_NAME_LEN - 1) {
             macroName[nameLen++] = **expr;
         }
@@ -113,10 +113,10 @@ static int parseNumber(const char** expr) {
     
     // Parse the number
     while (1) {
-        if (base == 10 && isdigit(**expr)) {
+        if (base == 10 && isdigit((int)**expr)) {
             value = value * 10 + (**expr - '0');
             (*expr)++;
-        } else if (base == 16 && isxdigit(**expr)) {
+        } else if (base == 16 && isxdigit((int)**expr)) {
             char c = tolower(**expr);
             if (isdigit(c)) {
                 value = value * 16 + (c - '0');
@@ -146,20 +146,20 @@ static int evaluateFactor(const char** expr) {
             fprintf(stderr, "Error: Missing closing parenthesis in expression\n");
         }
         return value;
-    } else if (isdigit(**expr)) {
+    } else if (isdigit((int)**expr)) {
         return parseNumber(expr);
-    } else if (strncmp(*expr, "defined", 7) == 0 && (isspace((*expr)[7]) || (*expr)[7] == '(')) {
+    } else if (strncmp(*expr, "defined", 7) == 0 && (isspace((int)(*expr)[7]) || (*expr)[7] == '(')) {
         (*expr) += 7;
         return evaluateDefinedOperator(expr);
-    } else if (strncmp(*expr, "sizeof", 6) == 0 && (isspace((*expr)[6]) || (*expr)[6] == '(')) {
+    } else if (strncmp(*expr, "sizeof", 6) == 0 && (isspace((int)(*expr)[6]) || (*expr)[6] == '(')) {
         (*expr) += 6;
         return evaluateSizeofOperator(expr);
-    } else if (isalpha(**expr) || **expr == '_') {
+    } else if (isalpha((int)**expr) || **expr == '_') {
         // Identifiers are treated as macros
         char macroName[MAX_MACRO_NAME_LEN];
         int nameLen = 0;
         
-        while (**expr && (isalnum(**expr) || **expr == '_')) {
+        while (**expr && (isalnum((int)**expr) || **expr == '_')) {
             if (nameLen < MAX_MACRO_NAME_LEN - 1) {
                 macroName[nameLen++] = **expr;
             }
