@@ -14,3 +14,5 @@
 
 #define NULL 0
 #define NULL_PTR (void*)0
+
+#define BIOS_KEY_ENTER 0x1C

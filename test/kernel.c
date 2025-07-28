@@ -3,33 +3,89 @@
 #include "test/stdarg.h"
 #include "test/color.h"
 
+#define ACTION_OKAY 0
+#define ACTION_FAIL 1
+#define ACTION_INFO 2
+#define ACTION_WARN 3
+
 [[naked]] void _KERNEL_START() {}
 
 void _after_diskload()
 {
     clearScreen();
     initUart();
-    writeLog("UART initialized.\r\n", 0);
-    writeLog("NCC Bootloader loaded in at (", 2);
-    writeDebug(stoa_hex(seconds));
-    writeDebug(":8000)\r\n");
-    writeLog("Setting GDT...\r\n", 2);
+    writeLognl("UART initialized.", ACTION_OKAY);
+    writeLog("NCC Bootloader loaded in at (", ACTION_INFO);
+    writeDebug(stoa_hex(getCS()));
+    writeDebug(":0x0000)\r\n");
+    writeLognl("Setting GDT...", ACTION_INFO);
     setGDT();
-    writeLog("GDT set.\r\n", 0);
-    writeLog("Installing INTs...\r\n", 2);
+    writeLognl("GDT set.", ACTION_OKAY);
+    writeLognl("Installing INTs...", ACTION_INFO);
     installIRQS();
+    writeLognl("Installed interrupts.", ACTION_OKAY);
     initPIT();
-    writeLog("PIT initialized.\r\n", 0);
+    writeLognl("PIT initialized.", ACTION_OKAY);
+
+    writeLognl("Entering shell...", ACTION_INFO);
+    shell();
+    haltForever();
+}
+
+void shell()
+{
+    writeLognl("Welcome to the NCC Bootloader shell!", ACTION_INFO);
+    writeLognl("Type 'help' for a list of commands.", ACTION_INFO);
 
     while (true)
     {
-        writeDebug("shell > ");
-        char* string = getString(true);
-        writeLog("You entered: ", 2);
-        writeDebug(string);
-        writeDebug("\r\n"); 
+        writeDebug("ncc> ");
+        char* command = getString(true);
+        if (strcmp(command, "help") == 0)
+        {
+            writeDebugnl("Available commands:");
+            writeDebugnl("  help - Show this help message");
+            writeDebugnl("  clear - Clear the screen");
+            writeDebugnl("  echo <text> - Echo the text to the screen");
+            writeDebugnl("  exit - Exit the shell");
+        }
+        else if (strcmp(command, "clear") == 0)
+        {
+            clearScreen();
+        }
+        else if (strcmp(command, "exit") == 0)
+        {
+            writeLognl("Exiting shell...", ACTION_INFO);
+            break;
+        }
+        else if (command[0] == 'e' && command[1] == 'c' && command[2] == 'h' && command[3] == 'o')
+        {
+            // If there's content after "echo", print it
+            if (command[4] == ' ')
+                writeDebugnl(command + 5);
+            else
+                writeDebug("\r\n");
+        }
+        else if (command[0] == 0)
+        {
+            continue; // Ignore empty commands
+        }
+        else
+        {
+            writeLog("Unknown command: ", ACTION_FAIL);
+            writeDebugnl(command);
+        }
     }
-    haltForever();
+}
+
+int strcmp(char *str1, char *str2)
+{
+    while (*str1 && (*str1 == *str2))
+    {
+        str1++;
+        str2++;
+    }
+    return *str1 - *str2;
 }
 
 
@@ -67,13 +123,12 @@ uint16_t getChar()
 
 [[naked]] char getCharLetter()
 {
-    __asm("mov ah, 0x00"); // BIOS keyboard read function
-    __asm("int 0x16");     // BIOS interrupt to read character
-    __asm("mov bl, al");
-    __asm("xor ax, ax");
-    __asm("mov al, bl"); // Move ASCII code to AH for output
-    __asm("ret");        // Return to caller
+    __asm("mov ah, 0x00");
+    __asm("int 0x16");
+    __asm("xor ah, ah");
+    __asm("ret");
 }
+
 
 char *getString(bool newline)
 {
@@ -133,10 +188,24 @@ char *getString(bool newline)
     return buffer; // Return the input string
 }
 
+void writeStringnl(char *str)
+{
+    writeString(str);
+    writeString("\r\n");
+}
+
 void writeString(char *str)
 {
     while (*str)
         writeChar(*str++);
+}
+
+void writeDebugnl(char *str)
+{
+    writeString(str);
+    writeString("\r\n");
+    writeUartString(str);
+    writeUartString("\r\n");
 }
 
 void writeDebug(char *str)
@@ -202,18 +271,20 @@ void clearVGAScreen(char c)
 
 void drawPixel(unsigned short x, unsigned short y, unsigned char color)
 {
-    writeFarPtr(0xA000, y * 320 + x, color);
+    unsigned short offset = (y * 320) + x; // Calculate offset for mode 13h
+    __asm("push es");
+    __asm("mov ax, 0xA000"); // Segment for video memory in mode 13h
+    __asm("mov es, ax");
+    __asm("mov di, %0" : : "r"(offset));
+    __asm("xor ax, ax");
+    __asm("mov al, %0" : : "q"(color)); // Use the constraint system properly
+    __asm("stosb");
+    __asm("pop es");
 }
 
 void drawRect(unsigned short x, unsigned short y, unsigned short width, unsigned short height, unsigned char color)
 {
-    for (unsigned short i = 0; i < height; i++)
-    {
-        for (unsigned short j = 0; j < width; j++)
-        {
-            drawPixel(x + j, y + i, color);
-        }
-    }
+    
 }
 
 void memset_far(unsigned short seg, unsigned short offset, unsigned char value, unsigned short size)
@@ -365,6 +436,12 @@ void writeUartString(char *str)
     {
         writeUart(*str++);
     }
+}
+
+void writeLognl(char *str, unsigned char level)
+{
+    writeLog(str, level);
+    writeDebug("\r\n");
 }
 
 void writeLog(char *str, unsigned char level)
