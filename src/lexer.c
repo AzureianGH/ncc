@@ -34,7 +34,7 @@ void initLexer(const char* src) {
 static void skipWhitespace() {
     while (source[position]) {
         // Skip spaces, tabs, newlines
-        if (isspace(source[position])) {
+        if (isspace((int)source[position])) {
             if (source[position] == '\n') {
                 line++;
                 column = 1;
@@ -123,11 +123,11 @@ Token getNextToken() {
     }
 
     // Handle keywords and identifiers
-    if (isalpha(source[position]) || source[position] == '_') {
+    if (isalpha((int)source[position]) || source[position] == '_') {
         size_t start = position;
         int startColumn = column;
         
-        while (isalnum(source[position]) || source[position] == '_') {
+        while (isalnum((int)source[position]) || source[position] == '_') {
             position++;
             column++;
         }
@@ -145,7 +145,7 @@ Token getNextToken() {
     }
 
     // Handle numbers
-    if (isdigit(source[position])) {
+    if (isdigit((int)source[position])) {
         size_t start = position;
         int startColumn = column;
         
@@ -153,13 +153,13 @@ Token getNextToken() {
         if (source[position] == '0' && (source[position + 1] == 'x' || source[position + 1] == 'X')) {
             position += 2;
             column += 2;
-            while (isxdigit(source[position])) {
+            while (isxdigit((int)source[position])) {
                 position++;
                 column++;
             }
         } else {
             // Regular decimal numbers
-            while (isdigit(source[position])) {
+            while (isdigit((int)source[position])) {
                 position++;
                 column++;
             }
@@ -235,7 +235,7 @@ Token getNextToken() {
                 case '"':  charValue = '"';  break;
                 case 'x': {
                     // Handle hex escape sequence \xHH
-                    if (isxdigit(source[position + 1]) && isxdigit(source[position + 2])) {
+                    if (isxdigit((int)source[position + 1]) && isxdigit((int)source[position + 2])) {
                         char hex[3] = {source[position + 1], source[position + 2], '\0'};
                         charValue = (char)strtol(hex, NULL, 16);
                         position += 2;
