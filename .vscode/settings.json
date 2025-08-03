@@ -21,7 +21,8 @@
         "stdarg.h": "c",
         "color.h": "c",
         "preprocessor.h": "c",
-        "direct.h": "c"
+        "direct.h": "c",
+        "ctype.h": "c"
     },
     "makefile.configureOnOpen": false
 }

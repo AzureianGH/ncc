@@ -5,8 +5,6 @@
 #include "token_debug.h"
 #include "attributes.h"
 #include "type_checker.h"
-#include "struct_support.h"
-#include "struct_parser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -53,11 +51,7 @@ TypeInfo parseStructType();
 TypeInfo parseType() {
     TypeInfo typeInfo;
     memset(&typeInfo, 0, sizeof(TypeInfo));
-    
-    // Check if it's a struct type
-    if (tokenIs(TOKEN_STRUCT)) {
-        return parseStructType();
-    }
+
     
     // Handle unsigned if present
     int isUnsigned = 0;
@@ -169,11 +163,6 @@ ASTNode* parseDeclaration() {
     if (tokenIs(TOKEN_ATTRIBUTE) || tokenIs(TOKEN_ATTR_OPEN)) {
         parseFunctionAttributes(&tempFuncInfo);
         hasAttributes = 1;
-    }
-    
-    // Check for struct definition
-    if (tokenIs(TOKEN_STRUCT)) {
-        return parseStructDefinition();
     }
     
     // Parse the type

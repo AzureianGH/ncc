@@ -100,9 +100,7 @@ char *getString(bool newline)
             if (ptr > buffer)
             { // Only remove if there's something to remove
                 ptr--; // Move pointer back
-                writeChar('\b'); // Echo backspace character
-                writeChar(' ');  // Overwrite with space
-                writeChar('\b'); // Move back again
+                writeString("\b \b"); // Echo backspace character, space, and backspace again
             }
         }
         else if (c == 0x1B) // Escape key

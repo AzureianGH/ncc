@@ -4,8 +4,6 @@
 #include "error_manager.h"
 #include "global_variables.h"
 #include "type_checker.h"
-#include "struct_support.h"
-#include "struct_codegen.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1130,84 +1128,6 @@ void generateExpression(ASTNode* node) {
             // Struct definitions only affect the type system
             break;
 
-        case NODE_MEMBER_ACCESS:
-            {
-                TypeInfo* baseType = getTypeInfoFromExpression(node->left);
-                if (!baseType) {
-                    reportError(-1, "Cannot access member of unknown type");
-                    return;
-                }
-                
-                // Handle struct pointer dereference (->)
-                if (node->member_access.op == OP_ARROW) {
-                    // Ensure we're working with a struct pointer
-                    if (baseType->type != TYPE_STRUCT || !baseType->is_pointer) {
-                        reportError(-1, "Cannot use -> operator on non-struct-pointer");
-                        return;
-                    }
-                    
-                    // Generate code to load the struct pointer into BX
-                    generateExpression(node->left);
-                    fprintf(asmFile, "    mov bx, ax    ; Load struct pointer into BX\n");
-                    
-                    // Calculate the member offset within the struct
-                    int offset = getMemberOffset(baseType->struct_info, node->member_access.member_name);
-                    if (offset < 0) {
-                        reportError(-1, "Struct %s has no member named %s", 
-                                  baseType->struct_info->name, node->member_access.member_name);
-                        return;
-                    }
-                    
-                    // Get the member's type to determine load size
-                    TypeInfo* memberType = getMemberType(baseType->struct_info, node->member_access.member_name);
-                    
-                    // Load the member value from the pointer + offset into AX
-                    if (memberType->type == TYPE_CHAR || memberType->type == TYPE_UNSIGNED_CHAR || memberType->type == TYPE_BOOL) {
-                        // Byte-sized member
-                        fprintf(asmFile, "    mov al, [bx+%d]  ; Load byte-sized struct member\n", offset);
-                        fprintf(asmFile, "    xor ah, ah       ; Clear high byte for byte-sized member\n");
-                    } else {
-                        // Word-sized or larger member (handle larger types separately)
-                        fprintf(asmFile, "    mov ax, [bx+%d]  ; Load struct member\n", offset);
-                    }
-                } 
-                // Handle direct struct access (.)
-                else if (node->member_access.op == OP_DOT) {
-                    // Ensure we're working with a struct
-                    if (baseType->type != TYPE_STRUCT) {
-                        reportError(-1, "Cannot use . operator on non-struct type");
-                        return;
-                    }
-                    
-                    // Generate code to get the struct address into BX
-                    // For locals/parameters, we already have memory access
-                    // For globals, we need to use the symbol address
-                    generateAddressOf(node->left);
-                    fprintf(asmFile, "    mov bx, ax    ; Load struct address into BX\n");
-                    
-                    // Calculate the member offset within the struct
-                    int offset = getMemberOffset(baseType->struct_info, node->member_access.member_name);
-                    if (offset < 0) {
-                        reportError(-1, "Struct %s has no member named %s", 
-                                  baseType->struct_info->name, node->member_access.member_name);
-                        return;
-                    }
-                    
-                    // Get the member's type to determine load size
-                    TypeInfo* memberType = getMemberType(baseType->struct_info, node->member_access.member_name);
-                    
-                    // Load the member value from the address + offset into AX
-                    if (memberType->type == TYPE_CHAR || memberType->type == TYPE_UNSIGNED_CHAR || memberType->type == TYPE_BOOL) {
-                        // Byte-sized member
-                        fprintf(asmFile, "    mov al, [bx+%d]  ; Load byte-sized struct member\n", offset);
-                        fprintf(asmFile, "    xor ah, ah       ; Clear high byte for byte-sized member\n");
-                    } else {
-                        // Word-sized or larger member (handle larger types separately)
-                        fprintf(asmFile, "    mov ax, [bx+%d]  ; Load struct member\n", offset);
-                    }
-                }
-                break;
-            }
         case NODE_LITERAL:
             // Handle different literal types
             if (node->literal.data_type == TYPE_FAR_POINTER) {
