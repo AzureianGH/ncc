@@ -1,210 +1,378 @@
 #include "error_manager.h"
 #include <stdio.h>
 #include <stdlib.h>
-#include <stdarg.h>
 #include <string.h>
 
-// Global variables for error management
-static const char* sourceFilename = NULL;
-static char* sourceBuffer = NULL;
-static int errorCount = 0;
-static int warningCount = 0;
-static int maxErrors = 20;
-static int quietMode = 0;
+// Global error manager state
+static ErrorManager errorManager;
 
-// ANSI color codes for terminal output
-#define COLOR_RED     "\033[1;31m"
-#define COLOR_GREEN   "\033[1;32m"
-#define COLOR_YELLOW  "\033[1;33m"
-#define COLOR_BLUE    "\033[1;34m"
-#define COLOR_MAGENTA "\033[1;35m"
-#define COLOR_CYAN    "\033[1;36m"
-#define COLOR_RESET   "\033[0m"
-
-// Initialize the error manager
-void initErrorManager(const char* filename, char* source, int quiet) {
-    sourceFilename = filename;
-    sourceBuffer = source;
-    errorCount = 0;
-    warningCount = 0;
-    quietMode = quiet;
+void initErrorManager(const char* filename, const char* sourceCode, int quietMode) {
+    memset(&errorManager, 0, sizeof(ErrorManager));
+    
+    errorManager.currentFile = filename ? strdup(filename) : NULL;
+    errorManager.sourceCode = sourceCode;
+    errorManager.quietMode = quietMode;
+    errorManager.maxErrors = 100; // Default max errors
+    errorManager.stopOnFirstError = 1; // Default: stop after first error
+    errorManager.suppressWarnings = 0;
+    errorManager.warningsAsErrors = 0;
+    errorManager.errors = NULL;
+    errorManager.lastError = NULL;
+    errorManager.errorCount = 0;
+    errorManager.warningCount = 0;
 }
 
-// Get the current source filename (without path)
-const char* getCurrentSourceFilename() {
-    if (!sourceFilename)
-        return "unknown";
-    
-    // Find the last path separator
-    const char *lastSlash = strrchr(sourceFilename, '/');
-    const char *lastBackslash = strrchr(sourceFilename, '\\');
-    
-    // Use the last separator found
-    const char *lastSep = lastSlash > lastBackslash ? lastSlash : lastBackslash;
-    if (!lastSep)
-        lastSep = lastBackslash; // In case only backslash exists
-    
-    // Return the filename portion
-    return lastSep ? lastSep + 1 : sourceFilename;
-}
-
-// Find the line start position given a position in the buffer
-static const char* findLineStart(const char* buffer, int position) {
-    const char* lineStart = buffer;
-    
-    // Find the start of the line
-    for (int i = 0; i < position; i++) {
-        if (buffer[i] == '\n') {
-            lineStart = &buffer[i + 1];
-        }
+void cleanupErrorManager(void) {
+    Error* current = errorManager.errors;
+    while (current) {
+        Error* next = current->next;
+        freeError(current);
+        current = next;
     }
     
-    return lineStart;
-}
-
-// Find the line end position given a position in the buffer
-static const char* findLineEnd(const char* buffer, int position) {
-    const char* lineEnd = strchr(&buffer[position], '\n');
-    if (!lineEnd) {
-        lineEnd = buffer + strlen(buffer);
-    }
-    return lineEnd;
-}
-
-// Count lines up to a position
-static int countLines(const char* buffer, int position) {
-    int lines = 1;
-    for (int i = 0; i < position; i++) {
-        if (buffer[i] == '\n') {
-            lines++;
-        }
-    }
-    return lines;
-}
-
-// Get column position in the current line
-static int getColumn(const char* buffer, int position) {
-    const char* lineStart = findLineStart(buffer, position);
-    return (int)(&buffer[position] - lineStart) + 1;
-}
-
-// Print a snippet of code with an error indicator
-static void printCodeSnippet(const char* buffer, int position) {
-    if (!buffer || !sourceBuffer) return;
-    
-    const char* lineStart = findLineStart(buffer, position);
-    const char* lineEnd = findLineEnd(buffer, position);
-    int lineLength = (int)(lineEnd - lineStart);
-    int column = (int)(&buffer[position] - lineStart);
-    
-    // Print line number and code snippet
-    int lineNum = countLines(sourceBuffer, position);
-    fprintf(stderr, " %4d | ", lineNum);
-    
-    // Print the line content
-    fwrite(lineStart, 1, lineLength, stderr);
-    fprintf(stderr, "\n");
-    
-    // Print the error indicator
-    fprintf(stderr, "      | ");
-    for (int i = 0; i < column; i++) {
-        fprintf(stderr, " ");
-    }
-    fprintf(stderr, "^~~~\n");
-}
-
-// Report an error
-void reportError(int position, const char* format, ...) {
-    if (errorCount >= maxErrors) {
-        return;
-    }
-
-    errorCount++;
-    
-    fprintf(stderr, "%serror:%s ", COLOR_RED, COLOR_RESET);
-    
-    if (sourceFilename) {
-        int line = countLines(sourceBuffer, position);
-        int col = getColumn(sourceBuffer, position);
-        fprintf(stderr, "%s:%d:%d: ", sourceFilename, line, col);
+    if (errorManager.currentFile) {
+        free((char*)errorManager.currentFile);
     }
     
+    memset(&errorManager, 0, sizeof(ErrorManager));
+}
+
+void reportError(ErrorSeverity severity, ErrorCategory category, 
+                int line, int column, const char* format, ...) {
     va_list args;
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    reportErrorV(severity, category, line, column, format, args);
     va_end(args);
-    fprintf(stderr, "\n");
-    
-    // Print code snippet if source is available
-    if (sourceBuffer) {
-        printCodeSnippet(sourceBuffer, position);
+}
+
+void reportErrorV(ErrorSeverity severity, ErrorCategory category,
+                 int line, int column, const char* format, va_list args) {
+    // Check if we should suppress warnings
+    if (severity == ERROR_WARNING && errorManager.suppressWarnings) {
+        return;
     }
     
-    if (errorCount >= maxErrors) {
-        fprintf(stderr, "Too many errors, stopping compilation.\n");
+    // Convert warnings to errors if requested
+    if (severity == ERROR_WARNING && errorManager.warningsAsErrors) {
+        severity = ERROR_ERROR;
+    }
+    
+    // Check error limit
+    if (severity >= ERROR_ERROR && errorManager.errorCount >= errorManager.maxErrors) {
+        return;
+    }
+    
+    // Create error structure
+    Error* error = malloc(sizeof(Error));
+    if (!error) {
+        fprintf(stderr, "Fatal: Out of memory reporting error\n");
+        exit(1);
+    }
+    
+    error->severity = severity;
+    error->category = category;
+    error->line = line;
+    error->column = column;
+    error->filename = errorManager.currentFile ? strdup(errorManager.currentFile) : NULL;
+    error->next = NULL;
+    
+    // Format message
+    char buffer[1024];
+    vsnprintf(buffer, sizeof(buffer), format, args);
+    error->message = strdup(buffer);
+    
+    // Get source line if available
+    error->source_line = getSourceLine(line);
+    
+    // Add to error list
+    if (!errorManager.errors) {
+        errorManager.errors = error;
+        errorManager.lastError = error;
+    } else {
+        errorManager.lastError->next = error;
+        errorManager.lastError = error;
+    }
+    
+    // Update counts
+    if (severity >= ERROR_ERROR) {
+        errorManager.errorCount++;
+    } else if (severity == ERROR_WARNING) {
+        errorManager.warningCount++;
+    }
+    
+    // Print error immediately if not in quiet mode
+    if (!errorManager.quietMode) {
+        printError(error);
+    }
+    
+    // Exit on fatal errors or stop-on-first-error
+    if (severity == ERROR_FATAL) {
+        fprintf(stderr, "Fatal error encountered, exiting.\n");
+        exit(1);
+    }
+    if (severity >= ERROR_ERROR && errorManager.stopOnFirstError) {
+        // Print a short summary and exit immediately
+        fprintf(stderr, "Compilation terminated after first error.\n");
         exit(1);
     }
 }
 
-// Report a warning
-void reportWarning(int position, const char* format, ...) {
-    warningCount++;
-    
-    fprintf(stderr, "%swarning:%s ", COLOR_YELLOW, COLOR_RESET);
-    
-    if (sourceFilename) {
-        int line = countLines(sourceBuffer, position);
-        int col = getColumn(sourceBuffer, position);
-        fprintf(stderr, "%s:%d:%d: ", sourceFilename, line, col);
-    }
-    
+// Convenience functions
+void parserError(int line, int column, const char* format, ...) {
     va_list args;
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    reportErrorV(ERROR_ERROR, ERROR_PARSER, line, column, format, args);
     va_end(args);
-    fprintf(stderr, "\n");
-    
-    // Print code snippet if source is available
-    if (sourceBuffer) {
-        printCodeSnippet(sourceBuffer, position);
-    }
 }
 
-// Report a note (additional information)
-void reportNote(int position, const char* format, ...) {
-    if (quietMode) return;
-    
-    fprintf(stderr, "%snote:%s ", COLOR_BLUE, COLOR_RESET);
-    
-    if (sourceFilename && position >= 0) {
-        int line = countLines(sourceBuffer, position);
-        int col = getColumn(sourceBuffer, position);
-        fprintf(stderr, "%s:%d:%d: ", sourceFilename, line, col);
-    }
-    
+void semanticError(int line, int column, const char* format, ...) {
     va_list args;
     va_start(args, format);
-    vfprintf(stderr, format, args);
+    reportErrorV(ERROR_ERROR, ERROR_SEMANTIC, line, column, format, args);
     va_end(args);
-    fprintf(stderr, "\n");
+}
+
+void codegenError(int line, int column, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    reportErrorV(ERROR_ERROR, ERROR_CODEGEN, line, column, format, args);
+    va_end(args);
+}
+
+void parserWarning(int line, int column, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    reportErrorV(ERROR_WARNING, ERROR_PARSER, line, column, format, args);
+    va_end(args);
+}
+
+void semanticWarning(int line, int column, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    reportErrorV(ERROR_WARNING, ERROR_SEMANTIC, line, column, format, args);
+    va_end(args);
+}
+
+void codegenWarning(int line, int column, const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    reportErrorV(ERROR_WARNING, ERROR_CODEGEN, line, column, format, args);
+    va_end(args);
+}
+
+void internalError(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    reportErrorV(ERROR_FATAL, ERROR_INTERNAL, 0, 0, format, args);
+    va_end(args);
+}
+
+void fatalError(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    reportErrorV(ERROR_FATAL, ERROR_INTERNAL, 0, 0, format, args);
+    va_end(args);
+}
+
+// Error query functions
+int hasErrors(void) {
+    return errorManager.errorCount > 0;
+}
+
+int hasWarnings(void) {
+    return errorManager.warningCount > 0;
+}
+
+int getErrorCount(void) {
+    return errorManager.errorCount;
+}
+
+int getWarningCount(void) {
+    return errorManager.warningCount;
+}
+
+Error* getErrors(void) {
+    return errorManager.errors;
+}
+
+// Error display
+void printError(Error* error) {
+    if (!error) return;
     
-    // Print code snippet if source is available and position is valid
-    if (sourceBuffer && position >= 0) {
-        printCodeSnippet(sourceBuffer, position);
+    // Print error location
+    if (error->filename) {
+        fprintf(stderr, "%s:", error->filename);
+    }
+    if (error->line > 0) {
+        fprintf(stderr, "%d:", error->line);
+    }
+    if (error->column > 0) {
+        fprintf(stderr, "%d:", error->column);
+    }
+    
+    // Print severity and category
+    fprintf(stderr, " %s: ", severityToString(error->severity));
+    if (error->category != ERROR_INTERNAL) {
+        fprintf(stderr, "[%s] ", categoryToString(error->category));
+    }
+    
+    // Print message
+    fprintf(stderr, "%s\n", error->message);
+    
+    // Print source context if available
+    if (error->source_line && error->line > 0 && error->column > 0) {
+        fprintf(stderr, "  %s\n", error->source_line);
+        
+        // Print caret pointing to error location
+        fprintf(stderr, "  ");
+        for (int i = 1; i < error->column; i++) {
+            fprintf(stderr, " ");
+        }
+        fprintf(stderr, "^\n");
     }
 }
 
-// Get the number of errors
-int getErrorCount() {
-    return errorCount;
+void printAllErrors(void) {
+    Error* current = errorManager.errors;
+    while (current) {
+        printError(current);
+        current = current->next;
+    }
 }
 
-// Get the number of warnings
-int getWarningCount() {
-    return warningCount;
+void printErrorsSummary(void) {
+    if (errorManager.errorCount > 0) {
+        fprintf(stderr, "%d error(s) generated.\n", errorManager.errorCount);
+    }
+    if (errorManager.warningCount > 0) {
+        fprintf(stderr, "%d warning(s) generated.\n", errorManager.warningCount);
+    }
 }
 
-// Set the maximum number of errors before giving up
-void setMaxErrors(int max) {
-    maxErrors = max;
+// Error settings
+void setMaxErrors(int maxErrors) {
+    errorManager.maxErrors = maxErrors;
+}
+
+void setStopOnFirstError(int enable) {
+    errorManager.stopOnFirstError = enable ? 1 : 0;
+}
+
+void setSuppressWarnings(int suppress) {
+    errorManager.suppressWarnings = suppress;
+}
+
+void setWarningsAsErrors(int enable) {
+    errorManager.warningsAsErrors = enable;
+}
+
+void setQuietMode(int quiet) {
+    errorManager.quietMode = quiet;
+}
+
+// Source context
+void setCurrentFile(const char* filename) {
+    if (errorManager.currentFile) {
+        free((char*)errorManager.currentFile);
+    }
+    errorManager.currentFile = filename ? strdup(filename) : NULL;
+}
+
+const char* getCurrentFile(void) {
+    return errorManager.currentFile;
+}
+
+char* getSourceLine(int lineNumber) {
+    if (!errorManager.sourceCode || lineNumber <= 0) {
+        return NULL;
+    }
+    
+    const char* source = errorManager.sourceCode;
+    int currentLine = 1;
+    const char* lineStart = source;
+    
+    // Find the start of the requested line
+    while (*source && currentLine < lineNumber) {
+        if (*source == '\n') {
+            currentLine++;
+            lineStart = source + 1;
+        }
+        source++;
+    }
+    
+    if (currentLine != lineNumber) {
+        return NULL; // Line not found
+    }
+    
+    // Find the end of the line
+    const char* lineEnd = lineStart;
+    while (*lineEnd && *lineEnd != '\n') {
+        lineEnd++;
+    }
+    
+    // Copy the line
+    int length = (int)(lineEnd - lineStart);
+    char* line = malloc(length + 1);
+    if (line) {
+        memcpy(line, lineStart, length);
+        line[length] = '\0';
+    }
+    
+    return line;
+}
+
+void showSourceContext(int line, int column) {
+    char* sourceLine = getSourceLine(line);
+    if (sourceLine) {
+        fprintf(stderr, "  %s\n", sourceLine);
+        
+        if (column > 0) {
+            fprintf(stderr, "  ");
+            for (int i = 1; i < column; i++) {
+                fprintf(stderr, " ");
+            }
+            fprintf(stderr, "^\n");
+        }
+        
+        free(sourceLine);
+    }
+}
+
+// Error utilities
+const char* severityToString(ErrorSeverity severity) {
+    switch (severity) {
+        case ERROR_NOTE: return "note";
+        case ERROR_WARNING: return "warning";
+        case ERROR_ERROR: return "error";
+        case ERROR_FATAL: return "fatal error";
+        default: return "unknown";
+    }
+}
+
+const char* categoryToString(ErrorCategory category) {
+    switch (category) {
+        case ERROR_LEXER: return "lexer";
+        case ERROR_PARSER: return "parser";
+        case ERROR_SEMANTIC: return "semantic";
+        case ERROR_CODEGEN: return "codegen";
+        case ERROR_LINKER: return "linker";
+        case ERROR_INTERNAL: return "internal";
+        default: return "unknown";
+    }
+}
+
+void freeError(Error* error) {
+    if (!error) return;
+    
+    if (error->filename) {
+        free(error->filename);
+    }
+    if (error->message) {
+        free(error->message);
+    }
+    if (error->source_line) {
+        free(error->source_line);
+    }
+    
+    free(error);
 }

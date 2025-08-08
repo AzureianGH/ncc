@@ -1,2157 +1,1831 @@
-/* enables `strdup(3)` on Cygwin, probably other systems */
-#define _GNU_SOURCE 1
-
 #include "codegen.h"
-#include "ast.h"
-#include "string_literals.h"
 #include "error_manager.h"
-#include "global_variables.h"
-#include "type_checker.h"
-#include "struct_support.h"
-#include "struct_codegen.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
-// External declarations from type_checker.c
-extern TypeInfo* getTypeInfo(const char* name);
-extern TypeInfo* getTypeInfoFromExpression(ASTNode* expr);
+// Global code generator state
+static CodeGenerator codegen;
 
-// Forward declarations
-void generateContinueStatement(ASTNode* node);
-void generateBreakStatement(ASTNode* node);
-
-// Define the optimization state
-OptimizationState optimizationState = {
-    .level = OPT_LEVEL_NONE,
-    .mergeStrings = 0
-};
-
-// Output file for assembly code
-FILE* asmFile = NULL;
-
-// String literals table
-int stringLiteralCount = 0;
-char** stringLiterals = NULL;
-// Track where the redefined strings start
-int redefineStringStartIndex = 0;
-
-// Array declarations table
-int arrayCount = 0;
-char** arrayNames = NULL;
-int* arraySizes = NULL;
-DataType* arrayTypes = NULL;
-char** arrayFunctions = NULL; // Track function names for arrays
-// Track where the redefined arrays start
-int redefineArrayStartIndex = 0;
-
-// Flags to track if marker functions were found
-int stringMarkerFound = 0;
-int arrayMarkerFound = 0;
-int globalMarkerFound = 0;
-
-// Flag to track if the location should be redefined (when __NCC_REDEFINE_LOCALS is defined)
-int redefineLocalsFound = 0;
-
-// System mode parameters for bootloader generation
-static int systemModeEnabled = 0;
-static int setStackSegmentPointer = 0;
-static unsigned int stackSegment = 0;
-static unsigned int stackPointer = 0;
-
-// Label counter for unique labels
-int labelCounter = 0;
-
-// Current function being generated
-static char* currentFunction = NULL;
-static int currentFunctionIsNaked = 0;
-
-// Variable tracking for stack offsets
-#define MAX_LOCALS 64
-typedef struct {
+// Simple per-function local variable tracking (stack offsets)
+typedef struct LocalVarEntry {
     char* name;
-    int offset;
-} LocalVariable;
+    int offset; // positive byte offset from BP/RBP; address as [bp - offset]
+    int isRegister; // 1 if this local lives in a register
+    Register reg;   // home register when isRegister=1
+} LocalVarEntry;
 
-static LocalVariable localVars[MAX_LOCALS];
-static int localVarCount = 0;
-static int stackSize = 0;
+static LocalVarEntry* locals = NULL;
+static int localCount = 0;
+static int currentStackOffset = 0; // grows as locals allocated
+static int savedRBXForThisFunction = 0; // x64 callee-saved preservation
 
-// Origin address for ORG directive
-static unsigned int originAddress = 0;
+// Simple per-function parameter tracking (positive offsets from BP/RBP)
+typedef struct ParamEntry {
+    char* name;
+    int offset; // positive byte offset from BP/RBP; address as [bp + offset]
+} ParamEntry;
 
-// Loop context tracking for break/continue statements
-#define MAX_LOOP_NESTING 16
-typedef struct {
-    char* continueLabel;  // Label to jump to for continue
-    char* breakLabel;     // Label to jump to for break
-} LoopContext;
+static ParamEntry* params = NULL;
+static int paramCountTracked = 0;
 
-static LoopContext loopStack[MAX_LOOP_NESTING];
-static int loopStackDepth = 0;
-
-// Push a new loop context onto the stack
-void pushLoopContext(const char* continueLabel, const char* breakLabel) {
-    if (loopStackDepth >= MAX_LOOP_NESTING) {
-        reportError(-1, "Maximum loop nesting depth exceeded");
-        return;
-    }
-    
-    loopStack[loopStackDepth].continueLabel = strdup(continueLabel);
-    loopStack[loopStackDepth].breakLabel = strdup(breakLabel);
-    loopStackDepth++;
-}
-
-// Pop the current loop context from the stack
-void popLoopContext() {
-    if (loopStackDepth > 0) {
-        loopStackDepth--;
-        free(loopStack[loopStackDepth].continueLabel);
-        free(loopStack[loopStackDepth].breakLabel);
-        loopStack[loopStackDepth].continueLabel = NULL;
-        loopStack[loopStackDepth].breakLabel = NULL;
-    }
-}
-
-// Get the current loop context (for break/continue)
-LoopContext* getCurrentLoopContext() {
-    if (loopStackDepth > 0) {
-        return &loopStack[loopStackDepth - 1];
-    }
-    return NULL;
-}
-
-// Get the current name of the function being generated
-const char* getCurrentFunctionName() {
-    return currentFunction ? currentFunction : "global";
-}
-
-// Clear local variables when entering a new function
-void clearLocalVars() {
-    for (int i = 0; i < localVarCount; i++) {
-        if (localVars[i].name) {
-            free(localVars[i].name);
+static void resetLocals(void) {
+    for (int i = 0; i < localCount; i++) {
+        // Free any reserved registers
+        if (locals[i].isRegister) {
+            if (locals[i].reg < MAX_REGISTERS) {
+                codegen.registerInUse[locals[i].reg] = 0;
+            }
         }
+        free(locals[i].name);
     }
-    localVarCount = 0;
-    stackSize = 0;
+    free(locals);
+    locals = NULL;
+    localCount = 0;
+    currentStackOffset = 0;
+
+    // Reset parameters as well
+    for (int i = 0; i < paramCountTracked; i++) {
+        free(params[i].name);
+    }
+    free(params);
+    params = NULL;
+    paramCountTracked = 0;
 }
 
-// Get the stack offset for a local variable, return 0 if not found (global)
-int getLocalVarOffset(const char* name) {
-    for (int i = 0; i < localVarCount; i++) {
-        if (localVars[i].name && strcmp(localVars[i].name, name) == 0) {
-            return localVars[i].offset;
-        }
-    }
-    return 0;  // Not a local variable
+static int addLocal(const char* name, int size) {
+    currentStackOffset += size;
+    int offset = currentStackOffset;
+    locals = (LocalVarEntry*)realloc(locals, sizeof(LocalVarEntry) * (localCount + 1));
+    locals[localCount].name = strdup(name);
+    locals[localCount].offset = offset;
+    locals[localCount].isRegister = 0;
+    locals[localCount].reg = REG_INVALID;
+    localCount++;
+    return offset;
 }
 
-// gcc disable unused variable warnings
-#ifdef __GNUC__
-#pragma GCC diagnostic ignored "-Wunused-parameter"
-#endif
-
-
-// Add a local variable and return its stack offset
-int addLocalVariable(const char* name, int size) {
-    if (localVarCount >= MAX_LOCALS) {
-        fprintf(stderr, "Error: Too many local variables\n");
-        exit(1);
-    }
-      
-    // For long/unsigned long, allocate 4 bytes
-    // For other types, use word-sized (2-byte) allocations on the stack for x86
-    // This ensures proper alignment and simplifies address calculations
-    int allocationSize = size == 4 ? 4 : 2; // Allocate 4 bytes for long types, 2 bytes for others
-    
-    stackSize += allocationSize;
-    localVars[localVarCount].name = strdupc(name);
-    localVars[localVarCount].offset = stackSize;
-    localVarCount++;
-    
-    return stackSize;
-}
-
-#ifdef __GNUC__
-#pragma GCC diagnostic pop
-#endif
-
-// Get the stack offset for a variable
-int getVariableOffset(const char* name) {
-    for (int i = 0; i < localVarCount; i++) {
-        if (strcmp(localVars[i].name, name) == 0) {
-            return localVars[i].offset;
-        }
-    }
-      // Variable not found - might be a global
-    return 0;
-}
-
-// Check if a variable is a parameter (parameters have negative offsets)
-int isParameter(const char* name) {
-    for (int i = 0; i < localVarCount; i++) {
-        if (strcmp(localVars[i].name, name) == 0) {
-            return localVars[i].offset < 0;
+static int findLocalOffset(const char* name, int* outOffset) {
+    for (int i = 0; i < localCount; i++) {
+        if (strcmp(locals[i].name, name) == 0) {
+            if (locals[i].isRegister) return 0; // not a stack local
+            if (outOffset) *outOffset = locals[i].offset;
+            return 1;
         }
     }
     return 0;
 }
 
-// Initialize code generator
-void initCodeGen(const char* outputFilename, unsigned int orgAddr) {
-    asmFile = fopen(outputFilename, "w");
-    if (!asmFile) {
-        fprintf(stderr, "Error: Could not open output file %s\n", outputFilename);
-        exit(1);
-    }
-    labelCounter = 0;
-    
-    // Initialize string tracking
-    stringLiteralCount = 0;
-    stringLiterals = NULL;
-    stringMarkerFound = 0;
-    redefineStringStartIndex = 0;
-      
-    // Initialize array tracking
-    arrayCount = 0;
-    arrayNames = NULL;
-    arraySizes = NULL;
-    arrayTypes = NULL;
-    arrayFunctions = NULL; // Track function names for arrays
-    arrayMarkerFound = 0;
-    redefineArrayStartIndex = 0;
-    
-    // Store origin address
-    originAddress = orgAddr;
-}
-
-// Initialize code generator for system mode (bootloader)
-void initCodeGenSystemMode(const char* outputFilename, unsigned int orgAddr,
-                          int setStkSegmentPointer, unsigned int stkSegment, unsigned int stkPointer) {
-    asmFile = fopen(outputFilename, "w");
-    if (!asmFile) {
-        fprintf(stderr, "Error: Could not open output file %s\n", outputFilename);
-        exit(1);
-    }
-    labelCounter = 0;
-    
-    // Initialize string tracking
-    stringLiteralCount = 0;
-    stringLiterals = NULL;
-    stringMarkerFound = 0;
-    redefineStringStartIndex = 0;
-      
-    // Initialize array tracking
-    arrayCount = 0;
-    arrayNames = NULL;
-    arraySizes = NULL;
-    arrayTypes = NULL;
-    arrayFunctions = NULL; // Track function names for arrays
-    arrayMarkerFound = 0;
-    redefineArrayStartIndex = 0;
-    
-    // Store origin address
-    originAddress = orgAddr;
-    
-    // Store system mode parameters for later use
-    systemModeEnabled = 1;
-    setStackSegmentPointer = setStkSegmentPointer;
-    stackSegment = stkSegment;
-    stackPointer = stkPointer;
-    
-    // Write origin directive to ASM file
-    fprintf(asmFile, "#org 0x%X\n\n", orgAddr);
-    fprintf(asmFile, "\n; Begin program code\n");
-}
-
-// Close code generator
-void finalizeCodeGen() {
-    if (asmFile) {
-        // Generate any global variables that weren't emitted at a marker
-        generateRemainingGlobals(asmFile);
-        
-        // Generate string literals section before closing
-        generateStringLiteralsSection();
-        
-        // Free string literals
-        for (int i = 0; i < stringLiteralCount; i++) {
-            if (stringLiterals[i]) {
-                free(stringLiterals[i]);
-            }
-        }
-        free(stringLiterals);
-        
-        // Free array tracking
-        for (int i = 0; i < arrayCount; i++) {
-            if (arrayNames[i]) {
-                free(arrayNames[i]);
-            }
-        }
-        free(arrayNames);
-        free(arraySizes);
-        free(arrayTypes);
-        
-        // Clean up global variables
-        cleanupGlobals();
-        
-        fclose(asmFile);
-        asmFile = NULL;
-    }
-}
-
-// Check if a node represents a pointer type
-int isPointerType(ASTNode* node) {
-    if (!node) return 0;
-    
-    // Direct check for literals - string literals are pointers
-    if (node->type == NODE_LITERAL) {
-        // String literals are pointers
-        if (node->literal.data_type == TYPE_CHAR && node->literal.string_value) {
-            return 1;
-        }
-        // Far pointers
-        if (node->literal.data_type == TYPE_FAR_POINTER) {
+static int findLocalRegister(const char* name, Register* outReg) {
+    for (int i = 0; i < localCount; i++) {
+        if (strcmp(locals[i].name, name) == 0 && locals[i].isRegister) {
+            if (outReg) *outReg = locals[i].reg;
             return 1;
         }
     }
-    
-    // For identifiers, check the symbol table
-    if (node->type == NODE_IDENTIFIER) {
-        TypeInfo* typeInfo = getTypeInfo(node->identifier);
-        return typeInfo && typeInfo->is_pointer;
+    return 0;
+}
+
+static int findParamOffset(const char* name, int* outOffset) {
+    for (int i = 0; i < paramCountTracked; i++) {
+        if (strcmp(params[i].name, name) == 0) {
+            if (outOffset) *outOffset = params[i].offset;
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int is64CalleeSaved(Register r) {
+    // In SysV AMD64: RBX, RBP, R12-R15 are callee-saved
+    return (r == REG_BX || r == REG_BP);
+}
+
+static int isAllocatableCallerSaved(Register r) {
+    // Prefer RCX, RDX, RSI, RDI as they map to caller-saved under SysV AMD64
+    return (r == REG_CX || r == REG_DX || r == REG_SI || r == REG_DI);
+}
+
+static int reserveRegister(Register r) {
+    if (r < MAX_REGISTERS && !codegen.registerInUse[r]) {
+        codegen.registerInUse[r] = 1;
+        return 1;
+    }
+    return 0;
+}
+
+static int allocateCallerSavedForLocal(Register* outReg) {
+    // Try preferred set: AX, then CX, DX, SI, DI (all caller-saved in SysV AMD64)
+    Register candidates[] = { REG_AX, REG_CX, REG_DX, REG_SI, REG_DI };
+    int n = sizeof(candidates)/sizeof(candidates[0]);
+    for (int i = 0; i < n; i++) {
+        if (reserveRegister(candidates[i])) {
+            *outReg = candidates[i];
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int addRegLocal(const char* name, int size, Register* outReg) {
+    (void)size;
+    Register r;
+    if (!allocateCallerSavedForLocal(&r)) return 0;
+    locals = (LocalVarEntry*)realloc(locals, sizeof(LocalVarEntry) * (localCount + 1));
+    locals[localCount].name = strdup(name);
+    locals[localCount].offset = 0;
+    locals[localCount].isRegister = 1;
+    locals[localCount].reg = r;
+    localCount++;
+    if (outReg) *outReg = r;
+    return 1;
+}
+
+static void addExistingRegLocal(const char* name, Register reg) {
+    // Mark as in-use when within tracked range
+    if (reg < MAX_REGISTERS) {
+        codegen.registerInUse[reg] = 1;
+    }
+    locals = (LocalVarEntry*)realloc(locals, sizeof(LocalVarEntry) * (localCount + 1));
+    locals[localCount].name = strdup(name);
+    locals[localCount].offset = 0;
+    locals[localCount].isRegister = 1;
+    locals[localCount].reg = reg;
+    localCount++;
+}
+
+static const char* ax_by_size(int size) {
+    // If strict16 is set and target is 16-bit, cap at 16-bit names
+    if (codegen.targetWidth == 16 && codegen.forceStrict16) {
+        switch (size) {
+            case 1: return "al";
+            case 2: default: return "ax";
+        }
+    }
+    switch (size) {
+        case 1: return "al";
+        case 2: return "ax";
+        case 4: return "eax";
+        case 8: return "rax";
+        default: return getRegisterName(REG_AX, codegen.targetWidth);
+    }
+}
+
+static const char* reg_by_size(Register r, int size) {
+    if (codegen.targetWidth == 16 && codegen.forceStrict16) {
+        // Allow 8-bit AL for AX family when size==1; otherwise 16-bit regs
+        if (size == 1 && r == REG_AX) return "al";
+        return getRegisterName(r, 16);
+    }
+    switch (size) {
+        case 1:
+            // Only AX family has 8-bit names here; fall back to 32-bit for others
+            if (r == REG_AX) return "al";
+            return getRegisterName(r, 32);
+        case 2:
+            if (r == REG_AX) return "ax";
+            return getRegisterName(r, 32);
+        case 4:
+            return getRegisterName(r, 32);
+        case 8:
+        default:
+            return getRegisterName(r, 64);
+    }
+}
+
+// Error handling wrapper
+static void codegenErrorSimple(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    char message[512];
+    vsnprintf(message, sizeof(message), format, args);
+    va_end(args);
+    codegenError(0, 0, "%s", message);
+}
+
+// Register allocation
+const char* getRegisterName(Register reg, int width) {
+    if (codegen.targetWidth == 16 && codegen.forceStrict16) {
+        width = 16;
+    }
+    switch (width) {
+        case 16:
+            switch (reg) {
+                case REG_AX: return "ax";
+                case REG_BX: return "bx";
+                case REG_CX: return "cx";
+                case REG_DX: return "dx";
+                case REG_SI: return "si";
+                case REG_DI: return "di";
+                case REG_BP: return "bp";
+                case REG_SP: return "sp";
+                default: return "ax";
+            }
+        case 32:
+            switch (reg) {
+                case REG_AX: return "eax";
+                case REG_BX: return "ebx";
+                case REG_CX: return "ecx";
+                case REG_DX: return "edx";
+                case REG_SI: return "esi";
+                case REG_DI: return "edi";
+                case REG_BP: return "ebp";
+                case REG_SP: return "esp";
+                case REG_R8: return "r8d";
+                case REG_R9: return "r9d";
+                case REG_R10: return "r10d";
+                case REG_R11: return "r11d";
+                case REG_R12: return "r12d";
+                case REG_R13: return "r13d";
+                case REG_R14: return "r14d";
+                case REG_R15: return "r15d";
+                default: return "eax";
+            }
+        case 64:
+            switch (reg) {
+                case REG_AX: return "rax";
+                case REG_BX: return "rbx";
+                case REG_CX: return "rcx";
+                case REG_DX: return "rdx";
+                case REG_SI: return "rsi";
+                case REG_DI: return "rdi";
+                case REG_BP: return "rbp";
+                case REG_SP: return "rsp";
+                case REG_R8: return "r8";
+                case REG_R9: return "r9";
+                case REG_R10: return "r10";
+                case REG_R11: return "r11";
+                case REG_R12: return "r12";
+                case REG_R13: return "r13";
+                case REG_R14: return "r14";
+                case REG_R15: return "r15";
+                default: return "rax";
+            }
+        default:
+            return "ax";
+    }
+}
+
+Register allocateRegister(void) {
+    for (int i = 0; i < MAX_REGISTERS; i++) {
+        if (i == REG_AX) continue; // avoid using AX/RAX as a temp
+        if (!codegen.registerInUse[i]) {
+            codegen.registerInUse[i] = 1;
+            return (Register)i;
+        }
     }
     
-    // For expressions, use the type inferred from the expression
-    TypeInfo* typeInfo = getTypeInfoFromExpression(node);
-    return typeInfo && typeInfo->is_pointer;
+    // If no registers available, spill one (simplified)
+    codegenErrorSimple("Register allocation failed - all registers in use");
+    return REG_AX; // fallback
 }
 
-// Generate a unique label ID
-int getNextLabelId() {
-    return labelCounter++;
+void freeRegister(Register reg) {
+    if (reg < MAX_REGISTERS) {
+        codegen.registerInUse[reg] = 0;
+    }
 }
 
-// Generate a label with prefix
-char* generateLabel(const char* prefix) {
-    char* label = malloc(strlen(prefix) + 10);
-    sprintf(label, "%s%d", prefix, getNextLabelId());
+// Assembly output
+void emitInstruction(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    
+    char instruction[256];
+    vsnprintf(instruction, sizeof(instruction), format, args);
+    va_end(args);
+    
+    fprintf(codegen.output, "    %s\n", instruction);
+    codegen.instructionCount++;
+}
+
+void emitLabel(const char* label) {
+    fprintf(codegen.output, "%s:\n", label);
+}
+
+void emitComment(const char* format, ...) {
+    va_list args;
+    va_start(args, format);
+    
+    char comment[256];
+    vsnprintf(comment, sizeof(comment), format, args);
+    va_end(args);
+    
+    fprintf(codegen.output, "    ; %s\n", comment);
+}
+
+// NAS-specific directives
+static void emitNasDirective(const char* directive, const char* value) {
+    if (value) {
+        fprintf(codegen.output, "#%s %s\n", directive, value);
+    } else {
+        fprintf(codegen.output, "#%s\n", directive);
+    }
+}
+
+static void emitNasWidth(int width) {
+    emitNasDirective("width", (width == 16) ? "16" : (width == 32) ? "32" : "64");
+}
+
+static void emitNasOrigin(unsigned long long origin) {
+    fprintf(codegen.output, "#origin 0x%llx\n", origin);
+}
+
+static void emitNasSection(const char* name) {
+    emitNasDirective("section", name);
+}
+
+static void emitNasGlobal(const char* name) {
+    emitNasDirective("global", name);
+}
+
+static void emitNasExtern(const char* name) {
+    emitNasDirective("extend", name); // NAS uses "extend" instead of "extern"
+}
+
+// --- String literal byte emission helpers ---
+// Decode a C string token (including surrounding quotes) into raw bytes.
+// Handles simple escapes: \n, \r, \t, \b, \f, \v, \\, \", \' and \0.
+// Returns a newly allocated buffer and length via outLen. Caller frees.
+static unsigned char* decodeStringTokenToBytes(const char* token, int* outLen) {
+    if (!token) {
+        *outLen = 0;
+        return NULL;
+    }
+    size_t len = strlen(token);
+    // Skip surrounding quotes if present
+    size_t i = 0;
+    size_t end = len;
+    if (len >= 2 && token[0] == '"' && token[len - 1] == '"') {
+        i = 1;
+        end = len - 1;
+    }
+    // Allocate worst-case buffer (no escapes shrink)
+    unsigned char* buf = (unsigned char*)malloc((end - i) + 1);
+    int j = 0;
+    while (i < end) {
+        char c = token[i++];
+        if (c == '\\' && i < end) {
+            char e = token[i++];
+            switch (e) {
+                case 'n': buf[j++] = '\n'; break;
+                case 'r': buf[j++] = '\r'; break;
+                case 't': buf[j++] = '\t'; break;
+                case 'b': buf[j++] = '\b'; break;
+                case 'f': buf[j++] = '\f'; break;
+                case 'v': buf[j++] = '\v'; break;
+                case '\\': buf[j++] = '\\'; break;
+                case '"': buf[j++] = '"'; break;
+                case '\'': buf[j++] = '\''; break;
+                case '0': buf[j++] = '\0'; break;
+                default:  // Unknown escape, keep literally the escaped char
+                    buf[j++] = (unsigned char)e;
+                    break;
+            }
+        } else {
+            buf[j++] = (unsigned char)c;
+        }
+    }
+    *outLen = j;
+    return buf;
+}
+
+static void emitDbBytes(const unsigned char* bytes, int len) {
+    fprintf(codegen.output, "    #db ");
+    for (int k = 0; k < len; k++) {
+        fprintf(codegen.output, "0x%X", (unsigned int)bytes[k] & 0xFF);
+        if (k != len - 1) {
+            fprintf(codegen.output, ", ");
+        }
+    }
+}
+
+// String literal management
+static char* addStringLiteral(const char* str) {
+    char* label = malloc(32);
+    snprintf(label, 32, "_str_%d", codegen.stringLiteralCount);
+    codegen.stringLiteralCount++;
+    
+    // Store for later emission
+    StringLiteral* literal = malloc(sizeof(StringLiteral));
+    literal->label = strdup(label);
+    literal->value = strdup(str);
+    literal->next = codegen.stringLiterals;
+    codegen.stringLiterals = literal;
+    
     return label;
 }
 
-void generateGlobalDeclaration(ASTNode* node);
-void generateFunction(ASTNode* node);
-void generateBlock(ASTNode* node);
-void generateStatement(ASTNode* node);
-void generateVariableDeclaration(ASTNode* node);
+// Code generation functions
 void generateExpression(ASTNode* node);
-void generateBinaryOp(ASTNode* node);
-void generateTernaryExpression(ASTNode* node);
-void generateReturnStatement(ASTNode* node);
-void generateFunctionCall(ASTNode* node);
-void generateAsmBlock(ASTNode* node);
-void generateAsmStmt(ASTNode* node);
-void generateForLoop(ASTNode* node);
+void generateStatement(ASTNode* node);
 
-// Generate the header for the program
-void generateProgramHeader() {
-    fprintf(asmFile, "; 8086 Assembly generated by NCC Compiler\n");
-    fprintf(asmFile, "#width 16\n");
-    // ORG directive for load address
-    fprintf(asmFile, "#origin 0x%X\n\n", originAddress);
-     // No program entry point boilerplate for flat binary
-}
-
-// Main code generation function
-void generateCode(ASTNode* root) {
-    if (!root) {
-        fprintf(stderr, "Error: Empty AST\n");
+static void generateBinaryOp(ASTNode* node) {
+    ASTNode* left = node->data.binary.left;
+    ASTNode* right = node->data.binary.right;
+    BinaryOperator op = node->data.binary.op;
+    
+    // Handle simple assignment to identifier
+    if (op == BIN_ASSIGN && left && left->type == AST_IDENTIFIER) {
+        // Evaluate RHS into AX
+        generateExpression(right);
+        int size = 4; // TODO: read from left->typeInfo
+        const char* ax = ax_by_size(size);
+        const char* bp = getRegisterName(REG_BP, codegen.targetWidth);
+        int off;
+        Register rhome;
+        int poff;
+        if (findParamOffset(left->data.identifier.name, &poff)) {
+            emitInstruction("mov [%s+%d], %s", bp, poff, ax);
+        } else
+        if (findLocalRegister(left->data.identifier.name, &rhome)) {
+            emitInstruction("mov %s, %s", reg_by_size(rhome, size), ax);
+        } else if (findLocalOffset(left->data.identifier.name, &off)) {
+            emitInstruction("mov [%s-%d], %s", bp, off, ax);
+        } else {
+            emitInstruction("mov [%s], %s", left->data.identifier.name, ax);
+        }
         return;
     }
-      // Debug message removed to reduce output verbosity
-    
-    // Start with program header
-    generateProgramHeader();
-    
-    // Process the AST - starting from the program node
-    if (root->type == NODE_PROGRAM) {
-        // Debug message removed to reduce output verbosity
-          // Process all top-level declarations and functions
-        ASTNode* current = root->left;
-          if (!current) {
-            fprintf(stderr, "Warning: Program node has no children (empty program)\n");
+
+    // Handle compound assignments like +=, -=, etc. to identifiers
+    if ((op == BIN_ADD_ASSIGN || op == BIN_SUB_ASSIGN || op == BIN_MUL_ASSIGN ||
+         op == BIN_DIV_ASSIGN || op == BIN_MOD_ASSIGN || op == BIN_AND_ASSIGN ||
+         op == BIN_OR_ASSIGN  || op == BIN_XOR_ASSIGN || op == BIN_LEFT_SHIFT_ASSIGN ||
+         op == BIN_RIGHT_SHIFT_ASSIGN) && left && left->type == AST_IDENTIFIER) {
+        int size = 4; // TODO: use left->typeInfo
+        const char* ax = ax_by_size(size);
+        const char* bp = getRegisterName(REG_BP, codegen.targetWidth);
+        int off;
+        Register rhome;
+        int poff;
+        int isParam = findParamOffset(left->data.identifier.name, &poff);
+        int hasRegHome = findLocalRegister(left->data.identifier.name, &rhome);
+        int isLocal = (!hasRegHome && !isParam) && findLocalOffset(left->data.identifier.name, &off);
+        // Load current left value into a temp register or use home reg directly
+        Register lreg = hasRegHome ? rhome : allocateRegister();
+        const char* lregName = reg_by_size(lreg, size);
+        if (!hasRegHome) {
+            if (isParam) {
+                emitInstruction("mov %s, [%s+%d]", lregName, bp, poff);
+            } else if (isLocal) {
+                emitInstruction("mov %s, [%s-%d]", lregName, bp, off);
+            } else {
+                emitInstruction("mov %s, [%s]", lregName, left->data.identifier.name);
+            }
         }
-        
-        int nodeCount = 0;
-        while (current) {
-            nodeCount++;
-              switch (current->type) {
-                case NODE_FUNCTION:
-                    // Debug message removed to reduce output verbosity
-                    generateFunction(current);
+
+        int inPlace = 0; // whether lreg updated in place (so no store-back needed for reg-home)
+
+        // Fast-path: if RHS is a literal and we have a reg home, use immediate ops when possible
+    if (hasRegHome && (right->type == AST_INTEGER_LITERAL || right->type == AST_CHAR_LITERAL || right->type == AST_BOOL_LITERAL)) {
+            long long imm = right->data.literal.intValue;
+            switch (op) {
+                case BIN_ADD_ASSIGN:
+                    emitInstruction("add %s, %lld", lregName, imm);
+                    inPlace = 1;
                     break;
-                case NODE_DECLARATION:
-                    // Debug message removed to reduce output verbosity 
-                    generateGlobalDeclaration(current);
+                case BIN_SUB_ASSIGN:
+                    emitInstruction("sub %s, %lld", lregName, imm);
+                    inPlace = 1;
+                    break;
+                case BIN_AND_ASSIGN:
+                    emitInstruction("and %s, %lld", lregName, imm);
+                    inPlace = 1;
+                    break;
+                case BIN_OR_ASSIGN:
+                    emitInstruction("or %s, %lld", lregName, imm);
+                    inPlace = 1;
+                    break;
+                case BIN_XOR_ASSIGN:
+                    emitInstruction("xor %s, %lld", lregName, imm);
+                    inPlace = 1;
+                    break;
+                case BIN_LEFT_SHIFT_ASSIGN:
+                    emitInstruction("mov cl, %lld", imm & 0xFF);
+                    emitInstruction("shl %s, cl", lregName);
+                    inPlace = 1;
+                    break;
+                case BIN_RIGHT_SHIFT_ASSIGN:
+                    emitInstruction("mov cl, %lld", imm & 0xFF);
+                    emitInstruction("shr %s, cl", lregName);
+                    inPlace = 1;
                     break;
                 default:
-                    fprintf(stderr, "Warning: Unsupported top-level node type: %d\n", current->type);
+                    break; // fall through to general path for MUL/DIV/MOD
             }
-            current = current->next;
-        }
-    }
-}
-
-// Forward declaration from preprocessor.h
-extern int isMacroDefined(const char* name);
-
-// Generate code for a function
-void generateFunction(ASTNode* node) {
-    if (!node || node->type != NODE_FUNCTION) return;
-    
-    char* funcName = node->function.func_name;
-    
-    // Check if we need to redefine locals flag
-    if (isMacroDefined("__NCC_REDEFINE_LOCALS") && !redefineLocalsFound) {
-        // Found the directive, so we need to reset markers to allow redefinition
-        redefineLocalsFound = 1;
-        stringMarkerFound = 0;
-        arrayMarkerFound = 0;
-        globalMarkerFound = 0;
-        
-        // Mark the current indices as the starting points for redefinition
-        redefineStringStartIndex = stringLiteralCount;
-        redefineArrayStartIndex = arrayCount;
-        markRedefineGlobalsStart(); // Mark global start index
-        
-        fprintf(asmFile, "; Detected __NCC_REDEFINE_LOCALS - marker locations will be updated\n");
-    }
-    
-    // Check if this is a special marker function
-    if (strcmp(funcName, "_NCC_STRING_LOC") == 0) {
-        // This is where string literals should go
-        generateStringsAtMarker();
-        
-        // Output only a comment for the marker when redefining locations
-        if (!redefineLocalsFound) {
-            fprintf(asmFile, "; String literal location marker\n");
-            fprintf(asmFile, "_%s:\n", funcName);
-        } else {
-            fprintf(asmFile, "; String literal location marker (redefined)\n");
-        }
-        return;
-    }
-    else if (strcmp(funcName, "_NCC_ARRAY_LOC") == 0) {
-        // This is where arrays should go
-        generateArraysAtMarker();
-        
-        // Output only a comment for the marker when redefining locations
-        if (!redefineLocalsFound) {
-            fprintf(asmFile, "; Array location marker\n");
-            fprintf(asmFile, "_%s:\n", funcName);
-        } else {
-            fprintf(asmFile, "; Array location marker (redefined)\n");
-        }
-        return;
-    }
-    else if (strcmp(funcName, "_NCC_GLOBAL_LOC") == 0) {
-        // This is where global variables should go
-        generateGlobalsAtMarker(asmFile);
-        
-        // Output only a comment for the marker when redefining locations
-        if (!redefineLocalsFound) {
-            fprintf(asmFile, "; Global variable location marker\n");
-            fprintf(asmFile, "_%s:\n", funcName);
-        } else {
-            fprintf(asmFile, "; Global variable location marker (redefined)\n");        }
-        return;
-    }
-    
-    // Check if this is the __start function and we're in system mode
-    if (systemModeEnabled && strcmp(funcName, "__start") == 0) {
-        // Inject system mode initialization code at the start of __start function
-        fprintf(asmFile, "; Function: %s\n", funcName);
-        fprintf(asmFile, "_%s:\n", funcName);  // Function label
-        
-        // Generate system mode initialization code
-        fprintf(asmFile, "; System mode initialization code\n");
-        fprintf(asmFile, "    cli                      ; Disable interrupts\n");
-        fprintf(asmFile, "    xor ax, ax               ; Clear AX register\n");
-        
-        if (setStackSegmentPointer) {
-            // Set up stack segment and pointer as specified
-            fprintf(asmFile, "    mov ax, 0x%04X         ; Set CS to specified value\n", stackSegment);
-            fprintf(asmFile, "    mov ss, ax             ; Set stack segment\n");
-            fprintf(asmFile, "    xor ax, ax             ; Clear AX register\n");
-            fprintf(asmFile, "    mov ax, 0x%04X         ; Set SP to specified value\n", stackPointer);
-            fprintf(asmFile, "    mov sp, ax             ; Set stack pointer\n");
-        }
-        
-        fprintf(asmFile, "    sti                      ; Re-enable interrupts\n");
-        fprintf(asmFile, "\n");
-        
-        // Continue with normal function processing but skip the function label generation
-        clearLocalVars();
-        currentFunction = funcName;
-        currentFunctionIsNaked = node->function.info.is_naked;
-        
-        // Skip function prologue for __start as it's the entry point
-        // Generate code for function body
-        if (node->function.body) {
-            generateBlock(node->function.body);
-        }
-        
-        // No epilogue for __start function as it should not return
-        fprintf(asmFile, "\n");
-        currentFunction = NULL;
-        currentFunctionIsNaked = 0;
-        return;
-    }
-      // Regular function processing
-    // Clear any local variables from previous functions
-    clearLocalVars();
-    funcName = node->function.func_name;
-    currentFunction = funcName;
-    currentFunctionIsNaked = node->function.info.is_naked;
-    
-    fprintf(asmFile, "; Function: %s\n", funcName);
-    
-    // Handle static functions - they get a special prefix to make them file-local
-    if (node->function.info.is_static) {
-        // Get sanitized filename for prefix
-        const char* filename = getCurrentSourceFilename();
-        char* prefix = strdupc(filename);
-        
-        // Remove extension and sanitize for label use
-        char* dot = strrchr(prefix, '.');
-        if (dot) *dot = '\0';
-        
-        // Replace invalid characters with underscore
-        for (char* c = prefix; *c; c++) {
-            if (!isalnum((int)*c) && *c != '_') {
-                *c = '_';
+            if (inPlace) {
+                // Result to AX as well unless home is already AX
+                if (!(hasRegHome && rhome == REG_AX)) {
+                    emitInstruction("mov %s, %s", ax, lregName);
+                }
             }
         }
-        
-        fprintf(asmFile, "_%s_%s: ; static function (file-local)\n", prefix, funcName);
-        free(prefix);
-    } else {
-        fprintf(asmFile, "_%s:\n", funcName);  // Prepend underscore to function names
-    }
-      // Check if this is a naked function (no prologue/epilogue)
-    if (currentFunctionIsNaked) {
-        fprintf(asmFile, "    ; Naked function - no prologue generated\n");
-    }
-    // Check if this function uses stackframe
-    else if (node->function.info.is_stackframe) {
-        fprintf(asmFile, "    ; Setup stackframe with register preservation\n");
-        fprintf(asmFile, "    push bp\n");
-        fprintf(asmFile, "    mov bp, sp\n");
-        fprintf(asmFile, "    push bx\n");
-        fprintf(asmFile, "    push cx\n");
-        fprintf(asmFile, "    push dx\n");
-        fprintf(asmFile, "    push si\n");
-        fprintf(asmFile, "    push di\n");
-        
-        // We'll calculate the actual space needed after processing all declarations
-        fprintf(asmFile, "    ; Space for local variables will be allocated later\n\n");
-    } else {
-        // Standard function prologue
-        fprintf(asmFile, "    push bp\n");
-        fprintf(asmFile, "    mov bp, sp\n\n");
-    }
-      // Add function parameters to local variable table
-    // Parameters start at bp+4 (return address is at bp+2)
-    int paramOffset = 4;
-    ASTNode* param = node->function.params;
-    while (param) {
-        // Parameters are accessed via positive offsets from bp
-        if (param->type == NODE_DECLARATION) {
-            // Store parameters in reverse order for easier access
-            localVars[localVarCount].name = strdupc(param->declaration.var_name);
-            localVars[localVarCount].offset = -paramOffset; // Negative offset means it's a parameter
-            localVarCount++;
-              // Parameters always take 2 bytes on the stack in 16-bit mode
-            paramOffset += 2;
+
+        if (!inPlace) {
+            // General path: evaluate RHS into AX and operate with lreg
+            generateExpression(right);
+
+            if (op == BIN_ADD_ASSIGN || op == BIN_SUB_ASSIGN || op == BIN_AND_ASSIGN ||
+                op == BIN_OR_ASSIGN || op == BIN_XOR_ASSIGN) {
+                const char* rname = ax; // RHS in AX
+                switch (op) {
+                    case BIN_ADD_ASSIGN: emitInstruction("add %s, %s", lregName, rname); break;
+                    case BIN_SUB_ASSIGN: emitInstruction("sub %s, %s", lregName, rname); break;
+                    case BIN_AND_ASSIGN: emitInstruction("and %s, %s", lregName, rname); break;
+                    case BIN_OR_ASSIGN:  emitInstruction("or %s, %s",  lregName, rname); break;
+                    case BIN_XOR_ASSIGN: emitInstruction("xor %s, %s", lregName, rname); break;
+                    default: break;
+                }
+                if (!(hasRegHome && rhome == REG_AX)) {
+                    emitInstruction("mov %s, %s", ax, lregName);
+                }
+                inPlace = hasRegHome; // updated lreg directly
+            } else if (op == BIN_LEFT_SHIFT_ASSIGN || op == BIN_RIGHT_SHIFT_ASSIGN) {
+                // shift count must be in CL
+                emitInstruction("mov cl, %s", getRegisterName(REG_AX, 8));
+                if (op == BIN_LEFT_SHIFT_ASSIGN) {
+                    emitInstruction("shl %s, cl", lregName);
+                } else {
+                    emitInstruction("shr %s, cl", lregName);
+                }
+                if (!(hasRegHome && rhome == REG_AX)) {
+                    emitInstruction("mov %s, %s", ax, lregName);
+                }
+                inPlace = hasRegHome;
+            } else if (op == BIN_MUL_ASSIGN) {
+                // Use two-operand imul when possible: imul lreg, r/m
+                emitInstruction("imul %s, %s", lregName, ax);
+                emitInstruction("mov %s, %s", ax, lregName);
+                inPlace = hasRegHome;
+            } else if (op == BIN_DIV_ASSIGN || op == BIN_MOD_ASSIGN) {
+                // Division requires AX:DX dividend; preserve lreg into AX first
+                emitInstruction("mov %s, %s", ax, lregName);
+                if (codegen.targetWidth == 16) {
+                    emitInstruction("xor dx, dx");
+                    emitInstruction("div %s", ax); // RHS still in AX; this is imperfect but placeholder
+                } else {
+                    const char* dxReg = getRegisterName(REG_DX, codegen.targetWidth);
+                    emitInstruction("xor %s, %s", dxReg, dxReg);
+                    emitInstruction("idiv %s", ax);
+                }
+                if (op == BIN_MOD_ASSIGN) {
+                    if (codegen.targetWidth == 16) {
+                        emitInstruction("mov ax, dx");
+                    } else {
+                        const char* dxReg = getRegisterName(REG_DX, codegen.targetWidth);
+                        emitInstruction("mov %s, %s", ax, dxReg);
+                    }
+                }
+                // Store back to lvalue below
+                inPlace = 0;
+            }
         }
-        param = param->next;
-    }
-    
-    // For variadic functions, add a comment about how to access additional arguments
-    if (node->function.info.is_variadic) {
-        fprintf(asmFile, "    ; This is a variadic function with %d fixed parameters\n", node->function.info.param_count);
-        fprintf(asmFile, "    ; Variable arguments start at [bp+%d]\n", paramOffset);
-        fprintf(asmFile, "    ; Use the va_XXX macros from stdarg.h to access variable arguments\n");
-        fprintf(asmFile, "    ; Example: va_list args; va_start(args, last_param); value = va_arg(args, type);\n");
-        
-        // If we're in debug mode, add detailed stack layout information
-        #ifndef QUIET_MODE
-        fprintf(asmFile, "    ; Stack layout for varargs:\n");
-        fprintf(asmFile, "    ; [bp+0] = Previous BP\n");
-        fprintf(asmFile, "    ; [bp+2] = Return address\n");
-        fprintf(asmFile, "    ; [bp+4] = First parameter\n");
-        
-        int offset = 4; // Start at first parameter
-        for (int i = 0; i < node->function.info.param_count; i++) {
-            fprintf(asmFile, "    ; [bp+%d] = Parameter %d\n", offset, i);
-            offset += 2; // Assuming 2 bytes per parameter
+
+        // Store back AX into left (skip if updated in place and home is a register)
+        if (hasRegHome) {
+            if (!inPlace) {
+                // Only needed for ops where result produced in AX and home isn't AX already
+                if (!(hasRegHome && rhome == REG_AX)) {
+                    emitInstruction("mov %s, %s", lregName, ax);
+                }
+            }
+        } else if (isParam) {
+            emitInstruction("mov [%s+%d], %s", bp, poff, ax);
+        } else if (isLocal) {
+            emitInstruction("mov [%s-%d], %s", bp, off, ax);
+        } else {
+            emitInstruction("mov [%s], %s", left->data.identifier.name, ax);
         }
-        
-        fprintf(asmFile, "    ; [bp+%d] = First variable argument\n", offset);
-        fprintf(asmFile, "    ; [bp+%d] = Second variable argument\n", offset + 2);
-        fprintf(asmFile, "    ; ... and so on\n");
-        #endif
+
+        if (!hasRegHome) freeRegister(lreg);
+        return;
     }
-    
-    // Generate code for function body
-    if (node->function.body) {
-        generateBlock(node->function.body);
-    }
-    
-    // Generate function exit label
-    fprintf(asmFile, "\n_%s_exit:\n", funcName);    // Function epilogue
-    if (node->function.info.is_naked) {
-        fprintf(asmFile, "    ; Naked function - no epilogue generated");
-        // No ret instruction for naked functions - user must provide it
-    }
-    else if (node->function.info.is_stackframe) {
-        fprintf(asmFile, "    ; Restore stackframe with registers\n");
-        
-        // If we allocated space for locals, deallocate it here
-        if (stackSize > 0) {
-            fprintf(asmFile, "    add sp, %d ; Remove space for local variables\n", stackSize);
+
+    // General assignment to memory (e.g., *ptr = rhs; arr[i] = rhs;)
+    if (op == BIN_ASSIGN && left) {
+        // Compute address for lvalue into a temp register
+        Register addrReg; int addrRegUsed = 0;
+        const char* addrName = NULL;
+        int handled = 0;
+        if (left->type == AST_UNARY_OP && left->data.unary.op == UNARY_DEREFERENCE) {
+            // Evaluate pointer expression -> AX holds address
+            generateExpression(left->data.unary.operand);
+            addrReg = allocateRegister();
+            addrName = getRegisterName(addrReg, codegen.targetWidth);
+            emitInstruction("mov %s, %s", addrName, getRegisterName(REG_AX, codegen.targetWidth));
+            handled = 1; addrRegUsed = 1;
+        } else if (left->type == AST_ARRAY_ACCESS) {
+            // Evaluate array base to AX
+            generateExpression(left->data.arrayAccess.array);
+            Register baseReg = allocateRegister();
+            const char* baseName = getRegisterName(baseReg, codegen.targetWidth);
+            emitInstruction("mov %s, %s", baseName, getRegisterName(REG_AX, codegen.targetWidth));
+            // Evaluate index -> AX
+            generateExpression(left->data.arrayAccess.index);
+            const char* indexName = getRegisterName(REG_AX, codegen.targetWidth);
+            // Assume element size 1 for now
+            emitInstruction("add %s, %s", baseName, indexName);
+            addrReg = baseReg;
+            addrName = baseName;
+            handled = 1; addrRegUsed = 1;
         }
-        
-        fprintf(asmFile, "    mov sp, bp\n");
-        fprintf(asmFile, "    pop di\n");
-        fprintf(asmFile, "    pop si\n");
-        fprintf(asmFile, "    pop dx\n");
-        fprintf(asmFile, "    pop cx\n");
-        fprintf(asmFile, "    pop bx\n");
-        fprintf(asmFile, "    pop bp\n");
-        fprintf(asmFile, "    ret\n");
-        fprintf(asmFile, "\n");
-    } else {
-        fprintf(asmFile, "    ; Standard function epilogue\n");
-        fprintf(asmFile, "    mov sp, bp\n");
-        fprintf(asmFile, "    pop bp\n");
-        fprintf(asmFile, "    ret\n");
-        fprintf(asmFile, "\n");
+
+        if (handled) {
+            // Evaluate RHS and store a byte (AL). TODO: width from typeInfo
+            generateExpression(right);
+            const char* ax8 = getRegisterName(REG_AX, 8);
+            emitInstruction("mov [%s], %s", addrName, ax8);
+            // Result of assignment is the stored value (in AX already). Zero-extend to target width
+            if (codegen.targetWidth == 16 && codegen.forceStrict16) {
+                emitInstruction("xor ah, ah");
+            } else {
+                emitInstruction("movzx %s, %s", getRegisterName(REG_AX, codegen.targetWidth), ax8);
+            }
+            if (addrRegUsed) freeRegister(addrReg);
+            return;
+        }
+    }
+
+    // Generate left operand
+    generateExpression(left);
+    Register leftReg = allocateRegister();
+    const char* leftRegName = getRegisterName(leftReg, codegen.targetWidth);
+    // Move result from AX into a temp only if temp is not AX (it never is now)
+    emitInstruction("mov %s, %s", leftRegName, getRegisterName(REG_AX, codegen.targetWidth));
+    
+    // Short-circuit logical operators: handle before generating RHS
+    if (op == BIN_LOGICAL_AND || op == BIN_LOGICAL_OR) {
+        char lShort[32], lEnd[32];
+        snprintf(lShort, sizeof lShort, ".L_logic_short_%d", codegen.labelCount);
+        snprintf(lEnd, sizeof lEnd, ".L_logic_end_%d", codegen.labelCount);
+        codegen.labelCount++;
+
+        const char* resultReg = getRegisterName(REG_AX, codegen.targetWidth);
+        const char* ax8 = getRegisterName(REG_AX, 8);
+
+        if (op == BIN_LOGICAL_AND) {
+            // if (left == 0) goto short (result 0); else evaluate right and set result = right != 0
+            emitInstruction("cmp %s, 0", leftRegName);
+            emitInstruction("je %s", lShort);
+            // left is non-zero; evaluate right
+            generateExpression(right);
+            emitInstruction("cmp %s, 0", resultReg);
+            emitInstruction("setne %s", ax8);
+            emitInstruction("jmp %s", lEnd);
+            emitLabel(lShort);
+            emitInstruction("xor %s, %s", ax8, ax8); // al = 0
+            emitLabel(lEnd);
+            if (codegen.targetWidth == 16 && codegen.forceStrict16) {
+                emitInstruction("xor ah, ah");
+            } else {
+                emitInstruction("movzx %s, %s", resultReg, ax8);
+            }
+        } else { // BIN_LOGICAL_OR
+            // if (left != 0) goto short (result 1); else evaluate right and set result = right != 0
+            emitInstruction("cmp %s, 0", leftRegName);
+            emitInstruction("jne %s", lShort);
+            // left is zero; evaluate right
+            generateExpression(right);
+            emitInstruction("cmp %s, 0", resultReg);
+            emitInstruction("setne %s", ax8);
+            emitInstruction("jmp %s", lEnd);
+            emitLabel(lShort);
+            emitInstruction("mov %s, 1", ax8); // al = 1
+            emitLabel(lEnd);
+            if (codegen.targetWidth == 16 && codegen.forceStrict16) {
+                emitInstruction("xor ah, ah");
+            } else {
+                emitInstruction("movzx %s, %s", resultReg, ax8);
+            }
+        }
+
+        freeRegister(leftReg);
+        return;
     }
     
-    currentFunction = NULL;
-    currentFunctionIsNaked = 0;
+    // Generate right operand
+    generateExpression(right);
+    Register rightReg = allocateRegister();
+    const char* rightRegName = getRegisterName(rightReg, codegen.targetWidth);
+    emitInstruction("mov %s, %s", rightRegName, getRegisterName(REG_AX, codegen.targetWidth));
+    
+    // Perform operation
+    const char* resultReg = getRegisterName(REG_AX, codegen.targetWidth);
+    
+    switch (op) {
+        case BIN_ADD:
+            emitInstruction("mov %s, %s", resultReg, leftRegName);
+            emitInstruction("add %s, %s", resultReg, rightRegName);
+            break;
+        case BIN_SUB:
+            emitInstruction("mov %s, %s", resultReg, leftRegName);
+            emitInstruction("sub %s, %s", resultReg, rightRegName);
+            break;
+        case BIN_MUL:
+            emitInstruction("mov %s, %s", resultReg, leftRegName);
+            if (codegen.targetWidth == 16) {
+                emitInstruction("mul %s", rightRegName);
+            } else {
+                emitInstruction("imul %s, %s", resultReg, rightRegName);
+            }
+            break;
+        case BIN_DIV:
+            emitInstruction("mov %s, %s", resultReg, leftRegName);
+            if (codegen.targetWidth == 16) {
+                emitInstruction("xor dx, dx"); // Clear DX for division
+                emitInstruction("div %s", rightRegName);
+            } else {
+                const char* dxReg = getRegisterName(REG_DX, codegen.targetWidth);
+                emitInstruction("xor %s, %s", dxReg, dxReg);
+                emitInstruction("idiv %s", rightRegName);
+            }
+            break;
+        case BIN_MOD:
+            emitInstruction("mov %s, %s", resultReg, leftRegName);
+            if (codegen.targetWidth == 16) {
+                emitInstruction("xor dx, dx");
+                emitInstruction("div %s", rightRegName);
+                emitInstruction("mov ax, dx"); // Result is in DX
+            } else {
+                const char* dxReg = getRegisterName(REG_DX, codegen.targetWidth);
+                emitInstruction("xor %s, %s", dxReg, dxReg);
+                emitInstruction("idiv %s", rightRegName);
+                emitInstruction("mov %s, %s", resultReg, dxReg);
+            }
+            break;
+        case BIN_BITWISE_AND:
+            emitInstruction("mov %s, %s", resultReg, leftRegName);
+            emitInstruction("and %s, %s", resultReg, rightRegName);
+            break;
+        case BIN_BITWISE_OR:
+            emitInstruction("mov %s, %s", resultReg, leftRegName);
+            emitInstruction("or %s, %s", resultReg, rightRegName);
+            break;
+        case BIN_BITWISE_XOR:
+            emitInstruction("mov %s, %s", resultReg, leftRegName);
+            emitInstruction("xor %s, %s", resultReg, rightRegName);
+            break;
+        case BIN_LEFT_SHIFT:
+            emitInstruction("mov %s, %s", resultReg, leftRegName);
+            emitInstruction("mov cl, %s", getRegisterName(rightReg, 8)); // CL for shift count
+            emitInstruction("shl %s, cl", resultReg);
+            break;
+        case BIN_RIGHT_SHIFT:
+            emitInstruction("mov %s, %s", resultReg, leftRegName);
+            emitInstruction("mov cl, %s", getRegisterName(rightReg, 8));
+            emitInstruction("shr %s, cl", resultReg);
+            break;
+        case BIN_EQ:
+        case BIN_NE:
+        case BIN_LT:
+        case BIN_LE:
+        case BIN_GT:
+        case BIN_GE:
+            emitInstruction("cmp %s, %s", leftRegName, rightRegName);
+            switch (op) {
+                case BIN_EQ: emitInstruction("sete al"); break;
+                case BIN_NE: emitInstruction("setne al"); break;
+                case BIN_LT: emitInstruction("setl al"); break;
+                case BIN_LE: emitInstruction("setle al"); break;
+                case BIN_GT: emitInstruction("setg al"); break;
+                case BIN_GE: emitInstruction("setge al"); break;
+                default: break;
+            }
+            if (codegen.targetWidth == 16 && codegen.forceStrict16) {
+                emitInstruction("xor ah, ah");
+            } else {
+                emitInstruction("movzx %s, al", resultReg);
+            }
+            break;
+        default:
+            codegenErrorSimple("Unsupported binary operator: %d", op);
+            break;
+    }
+    
+    freeRegister(leftReg);
+    freeRegister(rightReg);
 }
 
-// Generate code for a block of statements
-void generateBlock(ASTNode* node) {
-    if (!node || node->type != NODE_BLOCK) return;
+static void generateUnaryOp(ASTNode* node) {
+    ASTNode* operand = node->data.unary.operand;
+    UnaryOperator op = node->data.unary.op;
     
-    ASTNode* statement = node->left;
+    generateExpression(operand);
+    const char* reg = getRegisterName(REG_AX, codegen.targetWidth);
     
-    while (statement) {
-        generateStatement(statement);
-        statement = statement->next;
+    switch (op) {
+        case UNARY_MINUS:
+            emitInstruction("neg %s", reg);
+            break;
+        case UNARY_PLUS:
+            // No operation needed
+            break;
+        case UNARY_NOT:
+            emitInstruction("test %s, %s", reg, reg);
+            emitInstruction("setz al");
+            if (codegen.targetWidth == 16 && codegen.forceStrict16) {
+                emitInstruction("xor ah, ah");
+            } else {
+                emitInstruction("movzx %s, al", reg);
+            }
+            break;
+        case UNARY_BITWISE_NOT:
+            emitInstruction("not %s", reg);
+            break;
+        case UNARY_PRE_INCREMENT:
+            emitInstruction("inc %s", reg);
+            break;
+        case UNARY_PRE_DECREMENT:
+            emitInstruction("dec %s", reg);
+            break;
+        case UNARY_POST_INCREMENT:
+            // Would need to handle differently - return original value
+            emitInstruction("inc %s", reg);
+            break;
+        case UNARY_POST_DECREMENT:
+            emitInstruction("dec %s", reg);
+            break;
+        case UNARY_ADDRESS_OF:
+            // Would need symbol table to get address
+            codegenErrorSimple("Address-of operator not fully implemented");
+            break;
+        case UNARY_DEREFERENCE:
+            emitInstruction("mov %s, [%s]", reg, reg);
+            break;
+        default:
+            codegenErrorSimple("Unsupported unary operator: %d", op);
+            break;
     }
 }
 
-// Generate code for a statement
-void generateStatement(ASTNode* node) {
-    if (!node) return;
+static void generateLiteral(ASTNode* node) {
+    const char* reg = (codegen.targetWidth == 64) ? getRegisterName(REG_AX, 32)
+                                                 : getRegisterName(REG_AX, codegen.targetWidth);
     
     switch (node->type) {
-        case NODE_DECLARATION:
-            generateVariableDeclaration(node);
+        case AST_INTEGER_LITERAL:
+            emitInstruction("mov %s, %lld", reg, node->data.literal.intValue);
             break;
-              case NODE_ASSIGNMENT:
-            fprintf(asmFile, "    ; Assignment statement\n");
-            // Generate code for right-hand side
-            if (node->assignment.op != 0 && node->left->type == NODE_IDENTIFIER) {                // Compound assignment: compute old value and RHS
-                // Load current LHS value
-                int varOffset = getVariableOffset(node->left->identifier);
-                if (isParameter(node->left->identifier)) {
-                    fprintf(asmFile, "    mov ax, [bp+%d] ; Load parameter %s for compound assignment\n", 
-                            -varOffset, node->left->identifier);
-                } else if (varOffset > 0) {
-                    fprintf(asmFile, "    mov ax, [bp-%d] ; Load local variable %s for compound assignment\n", 
-                            varOffset, node->left->identifier);
-                } else {
-                    // Load from global variable
-                    // Get sanitized filename prefix
-                    const char* filename = getCurrentSourceFilename();
-                    char* prefix = (char*)malloc(strlen(filename) + 1);
-                    if (prefix) {
-                        strcpy(prefix, filename);
-                        char* dot = strrchr(prefix, '.');
-                        if (dot) *dot = '\0';
-                        for (char* c = prefix; *c; c++) {
-                            if (!isalnum((int)*c) && *c != '_') {
-                                *c = '_';
-                            }
-                        }
-                        
-                        fprintf(asmFile, "    ; Loading global variable %s for compound assignment\n", node->left->identifier);
-                        fprintf(asmFile, "    mov ax, [_%s_%s] ; Load global variable\n", 
-                                prefix, node->left->identifier);
-                        free(prefix);
-                    } else {
-                        fprintf(asmFile, "    ; Loading global variable %s for compound assignment\n", node->left->identifier);
-                        fprintf(asmFile, "    mov ax, [_%s] ; Load global variable (fallback)\n", node->left->identifier);
-                    }
-                }
-                fprintf(asmFile, "    push ax ; Save old value\n");
-                // Evaluate RHS
-                generateExpression(node->right);
-                fprintf(asmFile, "    push ax ; Save RHS value\n");
-                // Pop into registers: BX=rhs, AX=old
-                fprintf(asmFile, "    pop bx ; RHS value\n");
-                fprintf(asmFile, "    pop ax ; Old LHS value\n");
-                // Apply operation
-                switch (node->assignment.op) {
-                    case OP_PLUS_ASSIGN:
-                        fprintf(asmFile, "    add ax, bx ; +=\n");
-                        break;
-                    case OP_MINUS_ASSIGN:
-                        fprintf(asmFile, "    sub ax, bx ; -=\n");
-                        break;
-                    case OP_MUL_ASSIGN:
-                        fprintf(asmFile, "    imul bx ; *=\n");
-                        break;                    
-                        
-                    case OP_DIV_ASSIGN:
-                        {
-                            // Check if variable is unsigned
-                            TypeInfo* typeInfo = getTypeInfo(node->left->identifier);
-                            if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
-                                          typeInfo->type == TYPE_UNSIGNED_SHORT ||
-                                          typeInfo->type == TYPE_UNSIGNED_CHAR)) {
-                                fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned division\n");
-                                fprintf(asmFile, "    div bx ; /= (unsigned)\n");
-                            } else {
-                                fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for division\n");
-                                fprintf(asmFile, "    idiv bx ; /=\n");
-                            }
-                        }
-                        break;                    case OP_MOD_ASSIGN:
-                        {
-                            // Check if variable is unsigned
-                            TypeInfo* typeInfo = getTypeInfo(node->left->identifier);
-                            if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
-                                          typeInfo->type == TYPE_UNSIGNED_SHORT ||
-                                          typeInfo->type == TYPE_UNSIGNED_CHAR)) {
-                                fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned mod\n");
-                                fprintf(asmFile, "    div bx ; (unsigned)\n");
-                                fprintf(asmFile, "    mov ax, dx ; remainder in DX\n");
-                            } else {
-                                fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for mod\n");
-                                fprintf(asmFile, "    idiv bx ;\n");
-                                fprintf(asmFile, "    mov ax, dx ; remainder in DX\n");
-                            }
-                        }
-                        break;
-                    case OP_LEFT_SHIFT_ASSIGN:
-                        fprintf(asmFile, "    mov cx, bx ; Set shift count in CX\n");
-                        fprintf(asmFile, "    shl ax, cl ; Shift left (<<= operator)\n");
-                        break;
-                    case OP_RIGHT_SHIFT_ASSIGN:
-                        fprintf(asmFile, "    mov cx, bx ; Set shift count in CX\n");
-                        fprintf(asmFile, "    sar ax, cl ; Shift right (arithmetic) (>>= operator)\n");
-                        break;
-                    default:
-                        break;
-                }
-            } else if (node->assignment.op == 0) {
-                // Simple assignment: evaluate RHS
-                generateExpression(node->right);
-            } else {
-                // Other targets or ops: fallback to simple RHS
-                generateExpression(node->right);
-            }            // Store result in AX to the left-hand side
-            if (node->left->type == NODE_IDENTIFIER) {
-                // Check if this is a parameter or local variable
-                int varOffset = getVariableOffset(node->left->identifier);
-                if (isParameter(node->left->identifier)) {
-                    // Parameters have positive offsets from bp
-                    fprintf(asmFile, "    mov [bp+%d], ax ; Store in parameter %s\n", 
-                            -varOffset, node->left->identifier);
-                } else if (varOffset > 0) {
-                    // Local variables have negative offsets from bp
-                    fprintf(asmFile, "    mov [bp-%d], ax ; Store in local variable %s\n", 
-                            varOffset, node->left->identifier);
-                } else {
-                    // Must be a global variable
-                    // Get sanitized filename prefix
-                    const char* filename = getCurrentSourceFilename();
-                    char* prefix = (char*)malloc(strlen(filename) + 1);
-                    if (prefix) {
-                        strcpy(prefix, filename);
-                        char* dot = strrchr(prefix, '.');
-                        if (dot) *dot = '\0';
-                        for (char* c = prefix; *c; c++) {
-                            if (!isalnum((int)*c) && *c != '_') {
-                                *c = '_';
-                            }
-                        }
-                        
-                        fprintf(asmFile, "    mov [_%s_%s], ax ; Store in global variable %s\n", 
-                                prefix, node->left->identifier, node->left->identifier);
-                        free(prefix);
-                    } else {
-                        // Fallback if memory allocation fails
-                        fprintf(asmFile, "    mov [_%s], ax ; Store in global variable %s (fallback)\n", 
-                                node->left->identifier, node->left->identifier);
-                    }
-                }
-            }else if (node->left->type == NODE_UNARY_OP && node->left->unary_op.op == UNARY_DEREFERENCE) {
-                // Pointer assignment (e.g., *ptr = value)
-                // Save the right-hand side result temporarily
-                fprintf(asmFile, "    push ax ; Save right-hand side value\n");
-                
-                // Generate code to evaluate the pointer expression
-                generateExpression(node->left->right);
-                
-                // Check if this is a far pointer (segment in DX, offset in AX)
-                if (node->left->right->type == NODE_LITERAL && node->left->right->literal.data_type == TYPE_FAR_POINTER) {
-                    fprintf(asmFile, "    ; Far pointer assignment\n");
-                    fprintf(asmFile, "    push ds ; Save current DS\n");
-                    fprintf(asmFile, "    mov bx, ax ; Move offset to BX\n");
-                    fprintf(asmFile, "    mov ds, dx ; Set DS to segment\n");
-                    fprintf(asmFile, "    pop ax ; Restore right-hand side value\n");
-                    
-                    // Get type info to determine proper store size
-                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left->right);
-                    if (typeInfo && (typeInfo->type == TYPE_CHAR || 
-                                    typeInfo->type == TYPE_UNSIGNED_CHAR || 
-                                    typeInfo->type == TYPE_BOOL)) {
-                        fprintf(asmFile, "    mov [bx], al ; Store byte value through far pointer\n");
-                    } else {
-                        fprintf(asmFile, "    mov [bx], ax ; Store word value through far pointer\n");
-                    }
-                    
-                    fprintf(asmFile, "    pop ds ; Restore DS\n");
-                } else {
-                    // Regular near pointer
-                    fprintf(asmFile, "    mov bx, ax ; Move pointer address to BX\n");
-                    
-                    // Restore the value and store through the pointer
-                    fprintf(asmFile, "    pop ax ; Restore right-hand side value\n");
-                    
-                    // Get type info to determine proper store size
-                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left->right);
-                    if (typeInfo && (typeInfo->type == TYPE_CHAR || 
-                                    typeInfo->type == TYPE_UNSIGNED_CHAR || 
-                                    typeInfo->type == TYPE_BOOL)) {
-                        fprintf(asmFile, "    mov [bx], al ; Store byte value through pointer\n");
-                    } else {
-                        fprintf(asmFile, "    mov [bx], ax ; Store word value through pointer\n");
-                    }
-                }
-            }
-            else {
-                reportWarning(-1, "Unsupported assignment target");
-            }
+        case AST_FLOAT_LITERAL:
+            // Floating point would need FPU instructions
+            codegenErrorSimple("Floating point literals not fully implemented");
             break;
-            
-        case NODE_RETURN:
-            generateReturnStatement(node);
+        case AST_CHAR_LITERAL:
+            emitInstruction("mov %s, %d", reg, (int)node->data.literal.intValue);
             break;
-            
-        case NODE_EXPRESSION:
-            // Generate code for the expression, but we don't need the result
-            generateExpression(node->left);
+        case AST_STRING_LITERAL: {
+            char* label = addStringLiteral(node->data.literal.stringValue);
+            emitInstruction("mov %s, %s", getRegisterName(REG_AX, codegen.targetWidth), label);
+            free(label);
             break;
-              case NODE_ASM_BLOCK:
-            generateAsmBlock(node);
+        }
+        case AST_BOOL_LITERAL:
+            emitInstruction("mov %s, %d", reg, node->data.literal.intValue ? 1 : 0);
             break;
-            
-        case NODE_ASM:
-            generateAsmStmt(node);
-            break;
-            
-        case NODE_FOR:
-            generateForLoop(node);
-            break;
-              case NODE_WHILE:
-            generateWhileLoop(node);
-            break;
-            
-        case NODE_DO_WHILE:
-            generateDoWhileLoop(node);
-            break;
-              case NODE_IF:
-            generateIfStatement(node);
-            break;
-            
-        case NODE_BREAK:
-            generateBreakStatement(node);
-            break;
-            
-        case NODE_CONTINUE:
-            generateContinueStatement(node);
-            break;
-              default:
-            reportWarning(-1, "Unsupported statement type: %d", node->type);
+        default:
+            codegenErrorSimple("Unsupported literal type: %d", node->type);
             break;
     }
 }
 
-// Generate code for variable declaration
-void generateVariableDeclaration(ASTNode* node) {
-    if (!node || node->type != NODE_DECLARATION) return;
-    
-    // Check if this is an array with a fixed size
-    if (node->declaration.type_info.is_array && node->declaration.type_info.array_size > 0) {
-        // Check if this array has initializers
-        if (node->declaration.initializer) {
-            fprintf(asmFile, "    ; Array variable with initializers: %s[%d]\n", 
-                    node->declaration.var_name, 
-                    node->declaration.type_info.array_size);
-            // Register the array with its initializers for generation at the right location
-            generateArrayWithInitializers(node);
-        } else {
-            // Register the array for generation with zeros
-            fprintf(asmFile, "    ; Array variable without initializers: %s[%d]\n", 
-                    node->declaration.var_name, 
-                    node->declaration.type_info.array_size);
-            addArrayDeclaration(node->declaration.var_name,
-                                node->declaration.type_info.array_size,
-                                node->declaration.type_info.type,
-                                currentFunction);
-        }
-        
-        // Set up a pointer to the array
-        fprintf(asmFile, "    ; Setting up pointer to array %s[%d]\n", 
-                node->declaration.var_name, 
-                node->declaration.type_info.array_size);
-                
-        // Get sanitized filename prefix
-        const char* filename = getCurrentSourceFilename();
-        char* prefix = (char*)malloc(strlen(filename) + 1);
-        if (prefix) {
-            strcpy(prefix, filename);
-            char* dot = strrchr(prefix, '.');
-            if (dot) *dot = '\0';
-            for (char* c = prefix; *c; c++) {
-                if (!isalnum((int)*c) && *c != '_') {
-                    *c = '_';
-                }
-            }
-            
-            // Get the array index from addArrayDeclaration (should be the most recent one)
-            int arrIndex = arrayCount - 1;
-            
-            // Generate pointer to array with full unique label (file_function_name_index)
-            fprintf(asmFile, "    mov ax, _%s_%s_%s_%d ; Address of array\n", 
-                    prefix, currentFunction ? currentFunction : "global", 
-                    node->declaration.var_name, arrIndex);
-            free(prefix);
-        } else {
-            // Fallback with at least function name and index if we couldn't get a prefix
-            int arrIndex = arrayCount - 1;
-            fprintf(asmFile, "    mov ax, _%s_%s_%d ; Address of array (fallback)\n", 
-                    currentFunction ? currentFunction : "global", 
-                    node->declaration.var_name, arrIndex);
-        }
-        fprintf(asmFile, "    push ax ; Store pointer to array\n");
-        
-        // Add to local variable table
-        addLocalVariable(node->declaration.var_name, 2);  // Pointer size is 2 bytes
-        
-        return;
+void generateFunctionCall(ASTNode* node) {
+    // Optional: if function is an identifier and marked deprecated, warn
+    if (node->data.call.function && node->data.call.function->type == AST_IDENTIFIER) {
+        // We don't have symbol tables; attempt a heuristic: if there exists a function decl in AST it would be caught earlier.
+        // Placeholder: do nothing here without symbol resolution.
     }
-    
-    // For non-array local variables, proceed as before
-    fprintf(asmFile, "    ; Local variable declaration: %s\n", node->declaration.var_name);    // Determine variable size based on type
-    int varSize = 2; // Default for int, short
-    if (node->declaration.type_info.type == TYPE_CHAR || 
-        node->declaration.type_info.type == TYPE_UNSIGNED_CHAR) {
-        varSize = 1;
-    } else if (node->declaration.type_info.type == TYPE_LONG || 
-              node->declaration.type_info.type == TYPE_UNSIGNED_LONG) {
-        varSize = 4; // 32-bit size for long types
-    } else if (node->declaration.type_info.type == TYPE_STRUCT && 
-              node->declaration.type_info.struct_info) {
-        // For structs, use the calculated struct size
-        varSize = node->declaration.type_info.struct_info->size;
-    }    // If there's an initializer, generate code for the assignment
-    if (node->declaration.initializer) {
-        // For struct initializers, we need to handle each member
-        if (node->declaration.type_info.type == TYPE_STRUCT && 
-            node->declaration.type_info.struct_info) {
-            
-            StructInfo* structInfo = node->declaration.type_info.struct_info;
-            
-            // Check if we have a compound initializer (brace-enclosed)
-            if (node->declaration.initializer->next) {
-                // This is a compound initializer with values for each field
-                ASTNode* initValue = node->declaration.initializer;
-                StructMember* member = structInfo->members;
-                
-                // Calculate the total struct size to reserve space
-                int structSize = structInfo->size;
-                
-                // Reserve space for the struct on stack
-                if (structSize >= 2) {
-                    fprintf(asmFile, "    sub sp, %d  ; Reserve space for struct\n", structSize);
-                } else {
-                    fprintf(asmFile, "    push 0      ; Reserve space for small struct\n");
-                }
-                
-                // Initialize each member with the corresponding initializer
-                int offset = 0;
-                while (initValue && member) {
-                    // Generate the member initializer value
-                    generateExpression(initValue);
-                    
-                    // Determine base pointer and offset for storing member
-                    int memberOffset = member->offset;
-                    
-                    // Store the value in the appropriate member location
-                    if (member->type_info.type == TYPE_CHAR || 
-                        member->type_info.type == TYPE_UNSIGNED_CHAR || 
-                        member->type_info.type == TYPE_BOOL) {
-                        fprintf(asmFile, "    mov byte [bp-%d-%d], al  ; Initialize struct member %s\n", 
-                                stackSize, memberOffset, member->name);
-                    } else if (member->type_info.type == TYPE_LONG || 
-                              member->type_info.type == TYPE_UNSIGNED_LONG) {
-                        // Assume 32-bit value in dx:ax
-                        fprintf(asmFile, "    mov word [bp-%d-%d], ax  ; Initialize struct member %s low word\n", 
-                                stackSize, memberOffset, member->name);
-                        fprintf(asmFile, "    mov word [bp-%d-%d], dx  ; Initialize struct member %s high word\n", 
-                                stackSize, memberOffset + 2, member->name);
-                    } else {
-                        // Default case for 16-bit values
-                        fprintf(asmFile, "    mov word bp-%d-%d], ax  ; Initialize struct member %s\n", 
-                                stackSize, memberOffset, member->name);
-                    }
-                    
-                    // Move to next member and initializer
-                    member = member->next;
-                    initValue = initValue->next;
-                }
-            } else {
-                // Single-value initializer - not directly supported for structs
-                // Just reserve space
-                fprintf(asmFile, "    ; Warning: Single value initializer not supported for struct, leaving uninitialized\n");
-                
-                int structSize = structInfo->size;
-                int wordsToPush = (structSize + 1) / 2; // Round up to nearest word
-                
-                for (int i = 0; i < wordsToPush; i++) {
-                    fprintf(asmFile, "    push 0 ; Uninitialized struct space\n");
-                }
-            }
+    // On x64 SysV, pass first 6 integer/pointer args in RDI, RSI, RDX, RCX, R8, R9; rest on stack.
+    int wordSize = codegen.targetWidth / 8;
+    int needAlignAdjust = 0;
+    int argCount = node->data.call.argCount;
+    Register argRegs64[] = { REG_DI, REG_SI, REG_DX, REG_CX, REG_R8, REG_R9 };
+    int regArgCount = (codegen.targetWidth == 64) ? 6 : 0;
+
+    if (codegen.targetWidth == 64) {
+        // Determine number of stack args
+        int stackArgs = argCount > regArgCount ? (argCount - regArgCount) : 0;
+        // We'll push stack args (right-to-left) after evaluating them, but we also need alignment.
+        // Each stack arg is 8 bytes. Stack before call must be 16B aligned.
+        if (((stackArgs) % 2) != 0) {
+            needAlignAdjust = wordSize; // 8 bytes pad
+            const char* sp = getRegisterName(REG_SP, codegen.targetWidth);
+            emitInstruction("sub %s, %d", sp, needAlignAdjust);
         }
-        // For regular values
-        else {
-            // Generate the value
-            generateExpression(node->declaration.initializer);
-            
-            // For long values, need to handle 32-bit initialization
-            if (node->declaration.type_info.type == TYPE_LONG || 
-                node->declaration.type_info.type == TYPE_UNSIGNED_LONG) {
-                // For now, we'll initialize with lower 16 bits in AX and assume upper 16 bits are zero
-                // This would need to be expanded for full 32-bit literal support
-                fprintf(asmFile, "    push 0 ; Push high word (upper 16 bits)\n");
-                fprintf(asmFile, "    push ax ; Push low word (lower 16 bits)\n");
-            } else {
-                // For regular values, just push AX
-                fprintf(asmFile, "    push ax ; Initialize local variable\n");
-            }
+
+        // Push stack args (those beyond the first 6), right-to-left
+        for (int i = argCount - 1; i >= regArgCount; i--) {
+            generateExpression(node->data.call.arguments[i]);
+            emitInstruction("push %s", getRegisterName(REG_AX, 64));
+        }
+
+        // Load register args in order 0..5 (left-to-right)
+        for (int i = 0; i < argCount && i < regArgCount; i++) {
+            generateExpression(node->data.call.arguments[i]);
+            // For integer types, zero-extend into 64-bit reg (use eax for move zero-extends to rax implicitly)
+            // We don't have type info yet; zero/sign behavior TBD. Use 64-bit mov for now.
+            emitInstruction("mov %s, %s", getRegisterName(argRegs64[i], 64), getRegisterName(REG_AX, 64));
         }
     } else {
-        // Reserve space by pushing zeros
-        if (node->declaration.type_info.type == TYPE_STRUCT && 
-            node->declaration.type_info.struct_info) {
-            // For structs, push enough zeros to reserve the required space
-            int structSize = node->declaration.type_info.struct_info->size;
-            int wordsToPush = (structSize + 1) / 2; // Round up to nearest word
-            
-            fprintf(asmFile, "    ; Reserving %d bytes for uninit struct %s\n", 
-                   structSize, node->declaration.var_name);
-            
-            for (int i = 0; i < wordsToPush; i++) {
-                fprintf(asmFile, "    push 0 ; Uninitialized struct space\n");
+        // Non-64-bit: push all args right-to-left
+        for (int i = argCount - 1; i >= 0; i--) {
+            generateExpression(node->data.call.arguments[i]);
+            const char* reg = getRegisterName(REG_AX, codegen.targetWidth);
+            emitInstruction("push %s", reg);
+        }
+    }
+    
+    // Generate function expression (should be identifier)
+    if (node->data.call.function->type == AST_IDENTIFIER) {
+        const char* funcName = node->data.call.function->data.identifier.name;
+        if (funcName && funcName[0] != '_') {
+            emitInstruction("call _%s", funcName);
+        } else {
+            emitInstruction("call %s", funcName);
+        }
+    } else {
+        // Indirect call
+        generateExpression(node->data.call.function);
+        const char* reg = getRegisterName(REG_AX, codegen.targetWidth);
+        emitInstruction("call %s", reg);
+    }
+    
+    // Clean up stack (caller cleans up in most calling conventions)
+    if (codegen.targetWidth == 64) {
+        // Only stack-pushed args and any padding are cleaned here
+        int stackArgs = argCount > regArgCount ? (argCount - regArgCount) : 0;
+        int stackCleanup = stackArgs * wordSize + needAlignAdjust;
+        if (stackCleanup) {
+            const char* sp = getRegisterName(REG_SP, codegen.targetWidth);
+            emitInstruction("add %s, %d", sp, stackCleanup);
+        }
+    } else if (node->data.call.argCount > 0 || needAlignAdjust) {
+        int stackCleanup = argCount * wordSize + needAlignAdjust;
+        const char* sp = getRegisterName(REG_SP, codegen.targetWidth);
+        emitInstruction("add %s, %d", sp, stackCleanup);
+    }
+}
+
+void generateArrayAccess(ASTNode* node) {
+    // Generate array base address
+    generateExpression(node->data.arrayAccess.array);
+    Register baseReg = allocateRegister();
+    const char* baseRegName = getRegisterName(baseReg, codegen.targetWidth);
+    emitInstruction("mov %s, %s", baseRegName, getRegisterName(REG_AX, codegen.targetWidth));
+    
+    // Generate index
+    generateExpression(node->data.arrayAccess.index);
+    const char* indexReg = getRegisterName(REG_AX, codegen.targetWidth);
+    
+    // Calculate offset (assuming int elements for now)
+    int elementSize = 4; // Would need type information
+    if (elementSize > 1) {
+        emitInstruction("imul %s, %d", indexReg, elementSize);
+    }
+    
+    // Add to base address
+    emitInstruction("add %s, %s", baseRegName, indexReg);
+    
+    // Load value
+    emitInstruction("mov %s, [%s]", getRegisterName(REG_AX, codegen.targetWidth), baseRegName);
+    
+    freeRegister(baseReg);
+}
+
+void generateMemberAccess(ASTNode* node) {
+    // Generate object address
+    generateExpression(node->data.memberAccess.object);
+    
+    // For now, just treat as offset 0 (would need struct layout info)
+    const char* reg = getRegisterName(REG_AX, codegen.targetWidth);
+    
+    if (node->data.memberAccess.isPointer) {
+        // Pointer access: obj->member
+        emitInstruction("mov %s, [%s]", reg, reg);
+    }
+    // Direct access: obj.member - would need member offset
+    
+    emitComment("Member access: %s", node->data.memberAccess.memberName);
+}
+
+void generateInlineAssembly(ASTNode* node) {
+    emitComment("Inline assembly");
+
+    const char* asmText = node->data.inlineAsm.assembly ? node->data.inlineAsm.assembly : "";
+
+    // Minimal support for one operand mapped to AX:
+    // - If single input operand present: load that C variable into AX before asm
+    // - If single output operand present: replace %0 with AX and store AX into C variable after asm
+    char replaced[1024];
+    replaced[0] = '\0';
+    // Pre-load input operand into AX for templates using %0 when only an input is provided
+    if (node->data.inlineAsm.outputCount == 0 && node->data.inlineAsm.inputCount == 1) {
+        const char* inName = node->data.inlineAsm.inputOperands ? node->data.inlineAsm.inputOperands[0] : NULL;
+        const char* iconst = node->data.inlineAsm.inputConstraints ? node->data.inlineAsm.inputConstraints[0] : NULL;
+        if (inName && *inName) {
+            int size = 4;
+            if (iconst && strchr(iconst, 'q')) size = 1; // use 'q' as byte in our minimal dialect
+            const char* axs = ax_by_size(size);
+            const char* bp = getRegisterName(REG_BP, codegen.targetWidth);
+            int off, poff; Register rhome;
+            if (findParamOffset(inName, &poff)) {
+                emitInstruction("mov %s, [%s+%d]", axs, bp, poff);
+            } else if (findLocalRegister(inName, &rhome)) {
+                emitInstruction("mov %s, %s", axs, reg_by_size(rhome, size));
+            } else if (findLocalOffset(inName, &off)) {
+                emitInstruction("mov %s, [%s-%d]", axs, bp, off);
+            } else {
+                emitInstruction("mov %s, [%s]", axs, inName);
             }
         }
-        else if (node->declaration.type_info.type == TYPE_LONG || 
-                node->declaration.type_info.type == TYPE_UNSIGNED_LONG) {
-            // For 32-bit long, push two 16-bit zeros
-            fprintf(asmFile, "    push 0 ; Uninitialized long variable (high word)\n");
-            fprintf(asmFile, "    push 0 ; Uninitialized long variable (low word)\n");
-        } else {
-            // Just reserve space by pushing a zero
-            fprintf(asmFile, "    push 0 ; Uninitialized local variable\n");
-        }
     }
-    
-    // Add to local variable table
-    addLocalVariable(node->declaration.var_name, varSize);
-}
 
-// Generate code for global variable declaration
-void generateGlobalDeclaration(ASTNode* node) {
-    if (!node || node->type != NODE_DECLARATION) return;
-    
-    // Check if this is an array with a fixed size
-    if (node->declaration.type_info.is_array && node->declaration.type_info.array_size > 0) {
-        // Register the array for generation at the proper location
-        if (node->declaration.initializer) {
-            // Register array with initializers
-            generateArrayWithInitializers(node);
-        } else {
-            // Register array without initializers
-            addArrayDeclaration(node->declaration.var_name,
-                               node->declaration.type_info.array_size,
-                               node->declaration.type_info.type,
-                               "global"); // Global function context
+    if (node->data.inlineAsm.outputCount == 1) {
+        const char* outName = node->data.inlineAsm.outputOperands ? node->data.inlineAsm.outputOperands[0] : NULL;
+        const char* oconst = node->data.inlineAsm.outputConstraints ? node->data.inlineAsm.outputConstraints[0] : NULL;
+        // Replace %0 in the template with AX at appropriate width
+        int rsize = 4; if (oconst && strchr(oconst, 'q')) rsize = 1; if (codegen.targetWidth==16 && rsize!=1) rsize=2;
+        const char* ax = ax_by_size(rsize);
+        const char* p = asmText;
+        size_t len = 0;
+        while (*p && len + 4 < sizeof(replaced)) {
+            if (p[0] == '%' && p[1] == '0') {
+                // Insert register name
+                size_t rl = strlen(ax);
+                if (len + rl >= sizeof(replaced) - 1) break;
+                memcpy(&replaced[len], ax, rl);
+                len += rl; p += 2;
+            } else {
+                replaced[len++] = *p++;
+            }
         }
-        
-        // No code is emitted here - arrays will be generated at the marker or at the end
+        replaced[len] = '\0';
+        fprintf(codegen.output, "    %s\n", (replaced[0] ? replaced : asmText));
+
+        // If we have an out variable, store AX into it
+        if (outName && *outName) {
+            int size = 4; // default width until types integrated
+            if (oconst && strchr(oconst, 'q')) size = 1;
+            const char* axs = ax_by_size(size);
+            const char* bp = getRegisterName(REG_BP, codegen.targetWidth);
+            int off, poff; Register rhome;
+            if (findParamOffset(outName, &poff)) {
+                emitInstruction("mov [%s+%d], %s", bp, poff, axs);
+            } else if (findLocalRegister(outName, &rhome)) {
+                emitInstruction("mov %s, %s", reg_by_size(rhome, size), axs);
+            } else if (findLocalOffset(outName, &off)) {
+                emitInstruction("mov [%s-%d], %s", bp, off, axs);
+            } else {
+                emitInstruction("mov [%s], %s", outName, axs);
+            }
+        }
         return;
     }
-    
-    // Add global declaration to be generated at the _NCC_GLOBAL_LOC marker if present
-    addGlobalDeclaration(node);
+
+    // No mapped outputs: still replace %0 with AX if single input was preloaded
+    // so templates like "mov di, %0" use AX.
+    {
+        const char* p = asmText; char replaced2[1024]; size_t len2 = 0;
+        int rsize = 4;
+        if (node->data.inlineAsm.inputCount == 1) {
+            const char* iconst = node->data.inlineAsm.inputConstraints ? node->data.inlineAsm.inputConstraints[0] : NULL;
+            if (iconst && strchr(iconst, 'q')) rsize = 1;
+            if (codegen.targetWidth==16 && rsize!=1) rsize=2;
+        } else if (codegen.targetWidth==16) {
+            rsize = 2;
+        }
+        const char* ax = ax_by_size(rsize);
+        int did = 0;
+        while (*p && len2 + 4 < sizeof(replaced2)) {
+            if (p[0] == '%' && p[1] == '0') {
+                size_t rl = strlen(ax);
+                if (len2 + rl >= sizeof(replaced2) - 1) break;
+                memcpy(&replaced2[len2], ax, rl);
+                len2 += rl; p += 2; did = 1;
+            } else {
+                replaced2[len2++] = *p++;
+            }
+        }
+        replaced2[len2] = '\0';
+        fprintf(codegen.output, "    %s\n", did ? replaced2 : asmText);
+        return;
+    }
 }
 
-
-
-// Generate all collected global variables
-// Generate code for an expression
 void generateExpression(ASTNode* node) {
     if (!node) return;
     
     switch (node->type) {
-        case NODE_STRUCT_DEF:
-            // No code generation needed for struct definitions
-            // Struct definitions only affect the type system
-            break;
-
-        case NODE_MEMBER_ACCESS:
-            {
-                TypeInfo* baseType = getTypeInfoFromExpression(node->left);
-                if (!baseType) {
-                    reportError(-1, "Cannot access member of unknown type");
-                    return;
-                }
-                
-                // Handle struct pointer dereference (->)
-                if (node->member_access.op == OP_ARROW) {
-                    // Ensure we're working with a struct pointer
-                    if (baseType->type != TYPE_STRUCT || !baseType->is_pointer) {
-                        reportError(-1, "Cannot use -> operator on non-struct-pointer");
-                        return;
-                    }
-                    
-                    // Generate code to load the struct pointer into BX
-                    generateExpression(node->left);
-                    fprintf(asmFile, "    mov bx, ax    ; Load struct pointer into BX\n");
-                    
-                    // Calculate the member offset within the struct
-                    int offset = getMemberOffset(baseType->struct_info, node->member_access.member_name);
-                    if (offset < 0) {
-                        reportError(-1, "Struct %s has no member named %s", 
-                                  baseType->struct_info->name, node->member_access.member_name);
-                        return;
-                    }
-                    
-                    // Get the member's type to determine load size
-                    TypeInfo* memberType = getMemberType(baseType->struct_info, node->member_access.member_name);
-                    
-                    // Load the member value from the pointer + offset into AX
-                    if (memberType->type == TYPE_CHAR || memberType->type == TYPE_UNSIGNED_CHAR || memberType->type == TYPE_BOOL) {
-                        // Byte-sized member
-                        fprintf(asmFile, "    mov al, [bx+%d]  ; Load byte-sized struct member\n", offset);
-                        fprintf(asmFile, "    xor ah, ah       ; Clear high byte for byte-sized member\n");
-                    } else {
-                        // Word-sized or larger member (handle larger types separately)
-                        fprintf(asmFile, "    mov ax, [bx+%d]  ; Load struct member\n", offset);
-                    }
-                } 
-                // Handle direct struct access (.)
-                else if (node->member_access.op == OP_DOT) {
-                    // Ensure we're working with a struct
-                    if (baseType->type != TYPE_STRUCT) {
-                        reportError(-1, "Cannot use . operator on non-struct type");
-                        return;
-                    }
-                    
-                    // Generate code to get the struct address into BX
-                    // For locals/parameters, we already have memory access
-                    // For globals, we need to use the symbol address
-                    generateAddressOf(node->left);
-                    fprintf(asmFile, "    mov bx, ax    ; Load struct address into BX\n");
-                    
-                    // Calculate the member offset within the struct
-                    int offset = getMemberOffset(baseType->struct_info, node->member_access.member_name);
-                    if (offset < 0) {
-                        reportError(-1, "Struct %s has no member named %s", 
-                                  baseType->struct_info->name, node->member_access.member_name);
-                        return;
-                    }
-                    
-                    // Get the member's type to determine load size
-                    TypeInfo* memberType = getMemberType(baseType->struct_info, node->member_access.member_name);
-                    
-                    // Load the member value from the address + offset into AX
-                    if (memberType->type == TYPE_CHAR || memberType->type == TYPE_UNSIGNED_CHAR || memberType->type == TYPE_BOOL) {
-                        // Byte-sized member
-                        fprintf(asmFile, "    mov al, [bx+%d]  ; Load byte-sized struct member\n", offset);
-                        fprintf(asmFile, "    xor ah, ah       ; Clear high byte for byte-sized member\n");
-                    } else {
-                        // Word-sized or larger member (handle larger types separately)
-                        fprintf(asmFile, "    mov ax, [bx+%d]  ; Load struct member\n", offset);
-                    }
-                }
-                break;
-            }
-        case NODE_LITERAL:
-            // Handle different literal types
-            if (node->literal.data_type == TYPE_FAR_POINTER) {
-                // Load segment into dx, offset into ax for far pointers
-                fprintf(asmFile, "    mov dx, 0x%04X ; Segment\n", node->literal.segment);
-                fprintf(asmFile, "    mov ax, 0x%04X ; Offset\n", node->literal.offset);
-            } else if (node->literal.data_type == TYPE_CHAR && node->literal.string_value) {                // Add string to the string literals table and get its index
-                int strIndex = addStringLiteral(node->literal.string_value);
-                
-                if (strIndex >= 0) {
-                    // Get sanitized filename prefix
-                    const char* filename = getCurrentSourceFilename();
-                    char* prefix = (char*)malloc(strlen(filename) + 1);
-                    if (prefix) {
-                        strcpy(prefix, filename);
-                        char* dot = strrchr(prefix, '.');
-                        if (dot) *dot = '\0';
-                        for (char* c = prefix; *c; c++) {
-                            if (!isalnum((int)*c) && *c != '_') {
-                                *c = '_';
-                            }
-                        }
-                        
-                        // Load the address of the string into AX
-                        fprintf(asmFile, "    ; String literal: %s\n", node->literal.string_value);
-                        fprintf(asmFile, "    mov ax, %s_string_%d ; Address of string\n", prefix, strIndex);
-                        free(prefix);
-                    } else {
-                        fprintf(asmFile, "    ; String literal: %s\n", node->literal.string_value);
-                        fprintf(asmFile, "    mov ax, string_%d ; Address of string (fallback)\n", strIndex);
-                    }
-                } else {
-                    fprintf(asmFile, "    ; Error processing string literal: %s\n", 
-                            node->literal.string_value ? node->literal.string_value : "(null)");
-                    fprintf(asmFile, "    mov ax, 0 ; Using null pointer as fallback\n");
-                }            } else if (node->literal.data_type == TYPE_CHAR && !node->literal.string_value) {
-                // For character literals, load the ASCII value into al (8-bit)
-                // Then zero-extend to ax for consistent value handling
-                fprintf(asmFile, "    mov al, %d ; Load character value (ASCII: '%c')\n", 
-                       (unsigned char)node->literal.char_value, node->literal.char_value);
-                fprintf(asmFile, "    mov ah, 0 ; Zero-extend to 16-bit\n");
-            } else if (node->literal.data_type == TYPE_BOOL) {
-                // For boolean literals, load 0 or 1 into ax
-                fprintf(asmFile, "    mov ax, %d ; Load boolean value (%s)\n", 
-                       node->literal.int_value, node->literal.int_value ? "true" : "false");
-            }            else if (node->literal.data_type == TYPE_LONG || node->literal.data_type == TYPE_UNSIGNED_LONG) {
-                // For 32-bit long literals, load low 16 bits into AX and high 16 bits into DX
-                // Note: This assumes the literal can fit into 32 bits
-                int lowWord = node->literal.int_value & 0xFFFF;
-                int highWord = (node->literal.int_value >> 16) & 0xFFFF;
-                
-                fprintf(asmFile, "    mov ax, %d ; Load long literal (low word)\n", lowWord);
-                fprintf(asmFile, "    mov dx, %d ; Load long literal (high word)\n", highWord);
-            } else {
-                // For regular numbers, load the value into ax
-                fprintf(asmFile, "    mov ax, %d ; Load literal\n", node->literal.int_value);
-            }
-            break;
-          case NODE_IDENTIFIER:
-            // Check if this is a parameter or local variable
-            if (isParameter(node->identifier)) {
-                // Check if it's a long type
-                TypeInfo* typeInfo = getTypeInfo(node->identifier);
-                if (typeInfo && (typeInfo->type == TYPE_LONG || typeInfo->type == TYPE_UNSIGNED_LONG)) {
-                    // For 32-bit types, load low word into AX and high word into DX
-                    fprintf(asmFile, "    ; Loading long parameter %s\n", node->identifier);
-                    fprintf(asmFile, "    mov ax, [bp+%d] ; Load low word\n", 
-                            -getVariableOffset(node->identifier));
-                    fprintf(asmFile, "    mov dx, [bp+%d] ; Load high word\n", 
-                            -getVariableOffset(node->identifier) + 2);
-                } else {
-                    // Parameters have positive offsets from bp
-                    fprintf(asmFile, "    mov ax, [bp+%d] ; Load parameter %s\n", 
-                            -getVariableOffset(node->identifier), node->identifier);
-                }
-            } else {
-            // Local variables have negative offsets from bp
-                 int varOffset = getVariableOffset(node->identifier);
-                   if (varOffset == 0) {
-                    // Global variable or array
-                    const char* filename = getCurrentSourceFilename();
-                    char* prefix = (char*)malloc(strlen(filename) + 1);
-                    if (prefix) {
-                        strcpy(prefix, filename);
-                        char* dot = strrchr(prefix, '.'); if (dot) *dot = '\0';
-                        for (char* c = prefix; *c; c++) if (!isalnum((int)*c) && *c != '_') *c = '_';
-                    }                    // Determine if this global is an array
-                    TypeInfo* tinfo = getTypeInfo(node->identifier);
-                    if (tinfo && tinfo->is_array) {
-                        extern int arrayCount; extern char** arrayNames; extern char** arrayFunctions;
-                        int idx = -1;
-                        for (int ai = 0; ai < arrayCount; ai++) {
-                            if (strcmp(arrayNames[ai], node->identifier) == 0 && strcmp(arrayFunctions[ai], "global") == 0) {
-                                idx = ai; break;
-                            }
-                        }                        if (idx >= 0 && prefix) {
-                            fprintf(asmFile, "    mov ax, _%s_global_%s_%d ; Address of global array\n", prefix, node->identifier, idx);
-                            free(prefix);
-                            break;
-                        }
-                    }
-                    // Fallback for scalar global
-                    if (prefix) {
-                        fprintf(asmFile, "    ; Loading global variable %s\n", node->identifier);
-                        fprintf(asmFile, "    mov ax, [_%s_%s] ; Load global variable\n", prefix, node->identifier);
-                        free(prefix);
-                    } else {
-                        fprintf(asmFile, "    ; Loading global variable %s\n", node->identifier);
-                        fprintf(asmFile, "    mov ax, [_%s] ; Load global variable (fallback)\n", node->identifier);
-                    }
-                 } else {
-                     // Check if it's a long type
-                     TypeInfo* typeInfo = getTypeInfo(node->identifier);
-                     if (typeInfo && (typeInfo->type == TYPE_LONG || typeInfo->type == TYPE_UNSIGNED_LONG)) {
-                         // For 32-bit types, load low word into AX and high word into DX
-                         fprintf(asmFile, "    ; Loading long variable %s\n", node->identifier);
-                         fprintf(asmFile, "    mov ax, [bp-%d] ; Load low word\n", varOffset);
-                         fprintf(asmFile, "    mov dx, [bp-%d] ; Load high word\n", varOffset - 2);
-                     } else {
-                         // Ensure we use word-aligned offsets for local variables
-                         fprintf(asmFile, "    mov ax, [bp-%d] ; Load local variable %s\n", 
-                                 varOffset, node->identifier);
-                     }
-                 }
-             }
-             break;
-              case NODE_BINARY_OP:
-            // Generate code for binary operation
+        case AST_BINARY_OP:
             generateBinaryOp(node);
             break;
-              case NODE_UNARY_OP:
-            // Generate code for unary operation
+        case AST_TERNARY_OP: {
+            // condition ? trueExpr : falseExpr
+            const char* ax = ax_by_size(4);
+            char lTrue[32], lFalse[32], lEnd[32];
+            static int tcount = 0; int id = tcount++;
+            snprintf(lTrue, sizeof lTrue, ".L_ternary_true_%d", id);
+            snprintf(lFalse, sizeof lFalse, ".L_ternary_false_%d", id);
+            snprintf(lEnd, sizeof lEnd, ".L_ternary_end_%d", id);
+            // Evaluate condition
+            generateExpression(node->data.ternary.condition);
+            // Compare against zero and branch
+            emitInstruction("cmp %s, 0", ax);
+            emitInstruction("je %s", lFalse);
+            // True branch
+            emitLabel(lTrue);
+            generateExpression(node->data.ternary.trueExpr);
+            emitInstruction("jmp %s", lEnd);
+            // False branch
+            emitLabel(lFalse);
+            generateExpression(node->data.ternary.falseExpr);
+            // End
+            emitLabel(lEnd);
+            break;
+        }
+        case AST_UNARY_OP:
             generateUnaryOp(node);
             break;
-            
-        case NODE_TERNARY:
-            // Generate code for ternary conditional expression
-            generateTernaryExpression(node);
+        case AST_INTEGER_LITERAL:
+        case AST_FLOAT_LITERAL:
+        case AST_CHAR_LITERAL:
+        case AST_STRING_LITERAL:
+        case AST_BOOL_LITERAL:
+            generateLiteral(node);
             break;
-            
-        case NODE_CALL:
-            // Generate function call
+    case AST_IDENTIFIER:
+            // Load variable value
+            emitComment("Load variable: %s", node->data.identifier.name);
+            {
+        int size = 4; // TODO: read from node->typeInfo
+        const char* ax = ax_by_size(size);
+                const char* bp = getRegisterName(REG_BP, codegen.targetWidth);
+                int off;
+                int poff;
+                Register rhome;
+                if (findParamOffset(node->data.identifier.name, &poff)) {
+                    emitInstruction("mov %s, [%s+%d]", ax, bp, poff);
+                } else if (findLocalRegister(node->data.identifier.name, &rhome)) {
+                    // If the home is AX/EAX already, skip the move
+                    if (!(rhome == REG_AX)) {
+                        emitInstruction("mov %s, %s", ax, reg_by_size(rhome, size));
+                    }
+                } else if (findLocalOffset(node->data.identifier.name, &off)) {
+                    emitInstruction("mov %s, [%s-%d]", ax, bp, off);
+                } else {
+                    // Fallback to global symbol address
+                    emitInstruction("mov %s, [%s]", ax, node->data.identifier.name);
+                }
+            }
+            break;
+        case AST_FUNCTION_CALL:
             generateFunctionCall(node);
             break;
-        case NODE_ASSIGNMENT:
-            // Assignment used as expression: generate code and leave assigned value in AX
-            generateStatement(node);
-            break;        default:
-            reportWarning(-1, "Unsupported expression type: %d", node->type);
+        case AST_ARRAY_ACCESS:
+            generateArrayAccess(node);
             break;
-    }
-}
-
-// Generate code for binary operations
-void generateBinaryOp(ASTNode* node) {
-    // Short-circuit logical operators
-    if (node->operation.op == OP_LAND) {
-        char* falseLabel = generateLabel("land_false");
-        char* endLabel = generateLabel("land_end");
-        generateExpression(node->left);
-        fprintf(asmFile, "    test ax, ax ; logical AND left test\n");
-        fprintf(asmFile, "    jz %s ; left false, skip right\n", falseLabel);
-        generateExpression(node->right);
-        fprintf(asmFile, "    test ax, ax ; logical AND right test\n");
-        fprintf(asmFile, "    jz %s ; right false, result false\n", falseLabel);
-        fprintf(asmFile, "    mov ax, 1 ; both true -> true\n");
-        fprintf(asmFile, "    jmp %s\n", endLabel);
-        fprintf(asmFile, "%s:\n", falseLabel);
-        fprintf(asmFile, "    mov ax, 0 ; false\n");
-        fprintf(asmFile, "%s:\n", endLabel);
-        free(falseLabel);
-        free(endLabel);
-        return;
-    }
-    if (node->operation.op == OP_LOR) {
-        char* trueLabel = generateLabel("lor_true");
-        char* endLabel = generateLabel("lor_end");
-        generateExpression(node->left);
-        fprintf(asmFile, "    test ax, ax ; logical OR left test\n");
-        fprintf(asmFile, "    jnz %s ; left true, result true\n", trueLabel);
-        generateExpression(node->right);
-        fprintf(asmFile, "    test ax, ax ; logical OR right test\n");
-        fprintf(asmFile, "    jnz %s ; right true -> true\n", trueLabel);
-        fprintf(asmFile, "    mov ax, 0 ; both false -> false\n");
-        fprintf(asmFile, "    jmp %s\n", endLabel);
-        fprintf(asmFile, "%s:\n", trueLabel);
-        fprintf(asmFile, "    mov ax, 1 ; true\n");
-        fprintf(asmFile, "%s:\n", endLabel);
-        free(trueLabel);
-        free(endLabel);
-        return;    }
-    
-    // Check if we're operating on long types
-    TypeInfo* leftType = getTypeInfoFromExpression(node->left);
-    TypeInfo* rightType = getTypeInfoFromExpression(node->right);
-    int isLongOperation = (leftType && (leftType->type == TYPE_LONG || leftType->type == TYPE_UNSIGNED_LONG)) ||
-                        (rightType && (rightType->type == TYPE_LONG || rightType->type == TYPE_UNSIGNED_LONG));
-                        
-    if (isLongOperation) {
-        // For 32-bit operations, we need to handle the upper 16 bits (DX register)
-        fprintf(asmFile, "    ; 32-bit long operation detected\n");
-        
-        // Generate left operand (result in DX:AX)
-        generateExpression(node->left);
-        fprintf(asmFile, "    push dx ; Save left operand high word\n");
-        fprintf(asmFile, "    push ax ; Save left operand low word\n");
-        
-        // Generate right operand (result in DX:AX)
-        generateExpression(node->right);
-        fprintf(asmFile, "    mov cx, dx ; Right operand high word to CX\n");
-        fprintf(asmFile, "    mov bx, ax ; Right operand low word to BX\n");
-        
-        // Restore left operand to DX:AX
-        fprintf(asmFile, "    pop ax ; Restore left operand low word\n");
-        fprintf(asmFile, "    pop dx ; Restore left operand high word\n");
-    } else {
-        // Regular 16-bit operation
-        // Generate left operand and save
-        generateExpression(node->left);
-        fprintf(asmFile, "    push ax ; Save left operand\n");
-        
-        // Generate right operand, result in ax
-        generateExpression(node->right);
-        
-        // Move right operand to bx and restore left operand to ax
-        fprintf(asmFile, "    mov bx, ax ; Right operand to bx\n");
-        fprintf(asmFile, "    pop ax ; Restore left operand\n");
-    }    // Perform operation based on operator type
-    switch (node->operation.op) {
-        case OP_ADD:
-            // Check if this is a long operation
-            if (isLongOperation) {
-                fprintf(asmFile, "    ; 32-bit addition\n");
-                fprintf(asmFile, "    add ax, bx ; Add low words\n");
-                fprintf(asmFile, "    adc dx, cx ; Add high words with carry\n");
-            }
-            // Check for pointer arithmetic (pointer + integer)
-            else if (isPointerType(node->left)) {
-                // Get element size for scaling
-                TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
-                if (typeInfo) {
-                    int elemSize = (typeInfo->type == TYPE_CHAR || 
-                                   typeInfo->type == TYPE_UNSIGNED_CHAR || 
-                                   typeInfo->type == TYPE_BOOL) ? 1 : 2;
-                    
-                    if (elemSize > 1) {
-                        // Scale the offset by element size
-                        fprintf(asmFile, "    ; Pointer arithmetic: scale by element size %d\n", elemSize);
-                        fprintf(asmFile, "    shl bx, 1 ; Scale index by 2 for word elements\n");
-                    }
-                }
-                fprintf(asmFile, "    add ax, bx ; Addition\n");
-            } else if (isPointerType(node->right)) {
-                // Case of integer + pointer (need to scale integer)
-                TypeInfo* typeInfo = getTypeInfoFromExpression(node->right);
-                if (typeInfo) {
-                    int elemSize = (typeInfo->type == TYPE_CHAR || 
-                                   typeInfo->type == TYPE_UNSIGNED_CHAR || 
-                                   typeInfo->type == TYPE_BOOL) ? 1 : 2;
-                    
-                    if (elemSize > 1) {
-                        // Scale the offset by element size
-                        fprintf(asmFile, "    ; Pointer arithmetic: scale by element size %d\n", elemSize);
-                        fprintf(asmFile, "    shl ax, 1 ; Scale index by 2 for word elements\n");
-                    }
-                    
-                    // Swap operands to ensure pointer is in AX
-                    fprintf(asmFile, "    xchg ax, bx ; Swap to put pointer in AX\n");
-                }
-                fprintf(asmFile, "    add ax, bx ; Addition\n");
-            } else {
-                fprintf(asmFile, "    add ax, bx ; Addition\n");
-            }
+        case AST_MEMBER_ACCESS:
+        case AST_POINTER_ACCESS:
+            generateMemberAccess(node);
             break;
-              case OP_SUB:
-            // Check if this is a long operation
-            if (isLongOperation) {
-                fprintf(asmFile, "    ; 32-bit subtraction\n");
-                fprintf(asmFile, "    sub ax, bx ; Subtract low words\n");
-                fprintf(asmFile, "    sbb dx, cx ; Subtract high words with borrow\n");
-            }
-            // Check for pointer arithmetic (pointer - integer or pointer - pointer)
-            else if (isPointerType(node->left)) {
-                if (isPointerType(node->right)) {
-                    // Pointer - Pointer: yields a count of elements between pointers
-                    fprintf(asmFile, "    ; Pointer difference\n");
-                    fprintf(asmFile, "    sub ax, bx ; Calculate raw byte difference\n");
-                    
-                    // Divide by element size to get element count
-                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
-                    if (typeInfo && (typeInfo->type != TYPE_CHAR && 
-                                    typeInfo->type != TYPE_UNSIGNED_CHAR && 
-                                    typeInfo->type != TYPE_BOOL)) {
-                        fprintf(asmFile, "    sar ax, 1 ; Divide by 2 for word elements\n");
-                    }
-                } else {
-                    // Pointer - Integer: scale integer by element size
-                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
-                    if (typeInfo && (typeInfo->type != TYPE_CHAR && 
-                                    typeInfo->type != TYPE_UNSIGNED_CHAR && 
-                                    typeInfo->type != TYPE_BOOL)) {
-                        fprintf(asmFile, "    ; Pointer arithmetic: scale by element size\n");
-                        fprintf(asmFile, "    shl bx, 1 ; Scale index by 2 for word elements\n");
-                    }
-                    fprintf(asmFile, "    sub ax, bx ; Subtraction\n");
-                }
-            } else {
-                fprintf(asmFile, "    sub ax, bx ; Subtraction\n");
-            }
+        case AST_SIZEOF:
+            // Would need type information to calculate size
+            emitInstruction("mov %s, 4", getRegisterName(REG_AX, codegen.targetWidth));
+            emitComment("sizeof - using placeholder value");
             break;
-              case OP_MUL:
-            if (isLongOperation) {
-                // 32-bit multiplication is complex - needs multiple steps
-                fprintf(asmFile, "    ; 32-bit multiplication\n");
-                
-                // First save our operands 
-                fprintf(asmFile, "    push dx ; Save left high word\n");
-                fprintf(asmFile, "    push ax ; Save left low word\n");
-                fprintf(asmFile, "    push cx ; Save right high word\n");
-                fprintf(asmFile, "    push bx ; Save right low word\n");
-                
-                // First multiplication: left-low * right-low (result in DX:AX)
-                fprintf(asmFile, "    mov ax, [esp+2] ; Load left low word\n");
-                fprintf(asmFile, "    mov bx, [esp] ; Load right low word\n");
-                fprintf(asmFile, "    mul bx ; Unsigned multiply, result in DX:AX\n");
-                fprintf(asmFile, "    push dx ; Save high result of low*low\n");
-                fprintf(asmFile, "    push ax ; Save low result\n");
-                
-                // Second mult: left-high * right-low (result added to high word)
-                fprintf(asmFile, "    mov ax, [esp+8] ; Load left high word\n");
-                fprintf(asmFile, "    mov bx, [esp+4] ; Load right low word\n");
-                fprintf(asmFile, "    mul bx ; Multiply, result in DX:AX\n");
-                fprintf(asmFile, "    add [esp+2], ax ; Add to high word of result\n");
-                
-                // Third mult: left-low * right-high (result added to high word)
-                fprintf(asmFile, "    mov ax, [esp+6] ; Load left low word\n");
-                fprintf(asmFile, "    mov bx, [esp+4] ; Load right high word\n");
-                fprintf(asmFile, "    mul bx ; Multiply, result in DX:AX\n");
-                fprintf(asmFile, "    add [esp+2], ax ; Add to high word of result\n");
-                
-                // Get final result - ignoring overflows from high word * high word
-                fprintf(asmFile, "    pop ax ; Get low word of result\n");
-                fprintf(asmFile, "    pop dx ; Get high word of result\n");
-                
-                // Clean up the stack
-                fprintf(asmFile, "    add esp, 4 ; Clean up saved values\n");
-            } else {
-                fprintf(asmFile, "    imul bx ; Multiplication (signed)\n");
-            }
-            break;        case OP_DIV:
-            {
-                if (isLongOperation) {
-                    // 32-bit division is complex
-                    fprintf(asmFile, "    ; 32-bit division\n");
-                    
-                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
-                    if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_LONG)) {
-                        // We already have dividend in DX:AX and divisor in CX:BX
-                        // Use a custom division routine for 32-bit / 32-bit
-                        
-                        // For now, we'll only support division by 16-bit divisors
-                        // which is the common case when dividing by constants
-                        fprintf(asmFile, "    ; 32-bit unsigned division by 16-bit divisor\n");
-                        fprintf(asmFile, "    push cx ; Save divisor high word\n");
-                        
-                        // Check if high word of divisor is zero
-                        fprintf(asmFile, "    test cx, cx ; Check if high word of divisor is zero\n");
-                        fprintf(asmFile, "    jnz div32_complex ; Jump if we need a complex division\n");
-                        
-                        // Simple case: 32-bit / 16-bit = 16-bit
-                        fprintf(asmFile, "    div bx ; Divide DX:AX by BX\n");
-                        fprintf(asmFile, "    xor dx, dx ; Clear high word of result\n");
-                        fprintf(asmFile, "    jmp div32_done\n");
-                        
-                        // Complex case handler stub - would need a full algorithm
-                        fprintf(asmFile, "div32_complex:\n");
-                        fprintf(asmFile, "    ; Complex 32-bit division not fully implemented\n");
-                        fprintf(asmFile, "    ; Returning dividend as result\n");
-                        
-                        fprintf(asmFile, "div32_done:\n");
-                        fprintf(asmFile, "    add sp, 2 ; Clean up stack\n");
-                    } else {
-                        // Signed division - similar approach but using IDIV
-                        fprintf(asmFile, "    ; 32-bit signed division\n");
-                        fprintf(asmFile, "    push cx ; Save divisor high word\n");
-                        
-                        // Check if high word of divisor is zero
-                        fprintf(asmFile, "    test cx, cx ; Check if high word of divisor is zero\n");
-                        fprintf(asmFile, "    jnz idiv32_complex ; Jump if we need a complex division\n");
-                        
-                        // Simple case: 32-bit / 16-bit = 16-bit
-                        fprintf(asmFile, "    idiv bx ; Divide DX:AX by BX\n");
-                        fprintf(asmFile, "    cwd ; Sign extend result\n");
-                        fprintf(asmFile, "    jmp idiv32_done\n");
-                        
-                        // Complex case handler stub - would need a full algorithm
-                        fprintf(asmFile, "idiv32_complex:\n");
-                        fprintf(asmFile, "    ; Complex 32-bit division not fully implemented\n");
-                        fprintf(asmFile, "    ; Returning dividend as result\n");
-                        
-                        fprintf(asmFile, "idiv32_done:\n");
-                        fprintf(asmFile, "    add sp, 2 ; Clean up stack\n");
-                    }
-                } else {
-                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
-                    if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
-                                    typeInfo->type == TYPE_UNSIGNED_SHORT || 
-                                    typeInfo->type == TYPE_UNSIGNED_CHAR)) {
-                        fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned division\n");
-                        fprintf(asmFile, "    div bx ; Division (unsigned)\n");
-                    } else {
-                        fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for division\n");
-                        fprintf(asmFile, "    idiv bx ; Division (signed)\n");
-                    }
-                }
-            }
-            break;        case OP_MOD:
-            {
-                if (isLongOperation) {
-                    // 32-bit modulus is complex
-                    fprintf(asmFile, "    ; 32-bit modulus\n");
-                    
-                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
-                    if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_LONG)) {
-                        // Similar to division, but we want remainder instead
-                        // We already have dividend in DX:AX and divisor in CX:BX
-                        
-                        fprintf(asmFile, "    ; 32-bit unsigned modulus\n");
-                        fprintf(asmFile, "    push cx ; Save divisor high word\n");
-                        
-                        // Check if high word of divisor is zero
-                        fprintf(asmFile, "    test cx, cx ; Check if high word of divisor is zero\n");
-                        fprintf(asmFile, "    jnz mod32_complex ; Jump if we need a complex modulus\n");
-                        
-                        // Simple case: 32-bit % 16-bit
-                        fprintf(asmFile, "    div bx ; Divide DX:AX by BX\n");
-                        fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
-                        fprintf(asmFile, "    xor dx, dx ; Clear high word of result\n");
-                        fprintf(asmFile, "    jmp mod32_done\n");
-                        
-                        // Complex case handler stub
-                        fprintf(asmFile, "mod32_complex:\n");
-                        fprintf(asmFile, "    ; Complex 32-bit modulus not fully implemented\n");
-                        fprintf(asmFile, "    ; Returning 0 as result\n");
-                        fprintf(asmFile, "    xor ax, ax\n");
-                        fprintf(asmFile, "    xor dx, dx\n");
-                        
-                        fprintf(asmFile, "mod32_done:\n");
-                        fprintf(asmFile, "    add sp, 2 ; Clean up stack\n");
-                    } else {
-                        // Signed modulus 
-                        fprintf(asmFile, "    ; 32-bit signed modulus\n");
-                        fprintf(asmFile, "    push cx ; Save divisor high word\n");
-                        
-                        // Check if high word of divisor is zero
-                        fprintf(asmFile, "    test cx, cx ; Check if high word of divisor is zero\n");
-                        fprintf(asmFile, "    jnz imod32_complex ; Jump if we need a complex modulus\n");
-                        
-                        // Simple case: 32-bit % 16-bit
-                        fprintf(asmFile, "    idiv bx ; Divide DX:AX by BX\n");
-                        fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
-                        fprintf(asmFile, "    cwd ; Sign extend result\n");
-                        fprintf(asmFile, "    jmp imod32_done\n");
-                        
-                        // Complex case handler stub
-                        fprintf(asmFile, "imod32_complex:\n");
-                        fprintf(asmFile, "    ; Complex 32-bit modulus not fully implemented\n");
-                        fprintf(asmFile, "    ; Returning 0 as result\n");
-                        fprintf(asmFile, "    xor ax, ax\n");
-                        fprintf(asmFile, "    xor dx, dx\n");
-                        
-                        fprintf(asmFile, "imod32_done:\n");
-                        fprintf(asmFile, "    add sp, 2 ; Clean up stack\n");
-                    }
-                } else {
-                    TypeInfo* typeInfo = getTypeInfoFromExpression(node->left);
-                    if (typeInfo && (typeInfo->type == TYPE_UNSIGNED_INT || 
-                                    typeInfo->type == TYPE_UNSIGNED_SHORT || 
-                                    typeInfo->type == TYPE_UNSIGNED_CHAR)) {
-                        fprintf(asmFile, "    xor dx, dx ; Zero extend AX into DX:AX for unsigned mod\n");
-                        fprintf(asmFile, "    div bx ; Division (unsigned)\n");
-                        fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
-                    } else {
-                        fprintf(asmFile, "    cwd ; Sign extend AX into DX:AX for signed mod\n");
-                        fprintf(asmFile, "    idiv bx ; Division (signed)\n");
-                        fprintf(asmFile, "    mov ax, dx ; Remainder is in DX\n");
-                    }
-                }
-            }
+        case AST_INLINE_ASM:
+            generateInlineAssembly(node);
             break;
-              // Comparison operators for 8086 (without setcc instructions)
-        case OP_EQ:
-            fprintf(asmFile, "    cmp ax, bx ; Equal comparison\n");
-            fprintf(asmFile, "    mov ax, 0  ; Assume false\n");
-            fprintf(asmFile, "    je eq_true_%d\n", labelCounter);
-            fprintf(asmFile, "    jmp eq_end_%d\n", labelCounter);
-            fprintf(asmFile, "eq_true_%d:\n", labelCounter);
-            fprintf(asmFile, "    mov ax, 1  ; Set true\n");
-            fprintf(asmFile, "eq_end_%d:\n", labelCounter++);
-            break;
-        case OP_NEQ:
-            fprintf(asmFile, "    cmp ax, bx ; Not equal comparison\n");
-            fprintf(asmFile, "    mov ax, 0  ; Assume false\n");
-            fprintf(asmFile, "    jne neq_true_%d\n", labelCounter);
-            fprintf(asmFile, "    jmp neq_end_%d\n", labelCounter);
-            fprintf(asmFile, "neq_true_%d:\n", labelCounter);
-                       fprintf(asmFile, "    mov ax, 1  ; Set true\n");
-            fprintf(asmFile, "neq_end_%d:\n", labelCounter++);
-            break;
-        case OP_LT:
-            fprintf(asmFile, "    cmp ax, bx ; Less than comparison\n");
-            fprintf(asmFile, "    mov ax, 0  ; Assume false\n");
-            fprintf(asmFile, "    jl lt_true_%d\n", labelCounter);
-            fprintf(asmFile, "    jmp lt_end_%d\n", labelCounter);
-            fprintf(asmFile, "lt_true_%d:\n", labelCounter);
-            fprintf(asmFile, "    mov ax, 1  ; Set true\n");
-            fprintf(asmFile, "lt_end_%d:\n", labelCounter++);
-            break;
-        case OP_LTE:
-            fprintf(asmFile, "    cmp ax, bx ; Less than or equal comparison\n");
-            fprintf(asmFile, "    mov ax, 0  ; Assume false\n");
-            fprintf(asmFile, "    jle lte_true_%d\n", labelCounter);
-            fprintf(asmFile, "    jmp lte_end_%d\n", labelCounter);
-            fprintf(asmFile, "lte_true_%d:\n", labelCounter);
-            fprintf(asmFile, "    mov ax, 1  ; Set true\n");
-            fprintf(asmFile, "lte_end_%d:\n", labelCounter++);
-            break;
-        case OP_GT:
-            fprintf(asmFile, "    cmp ax, bx ; Greater than comparison\n");
-            fprintf(asmFile, "    mov ax, 0  ; Assume false\n");
-            fprintf(asmFile, "    jg gt_true_%d\n", labelCounter);
-            fprintf(asmFile, "    jmp gt_end_%d\n", labelCounter);
-            fprintf(asmFile, "gt_true_%d:\n", labelCounter);
-            fprintf(asmFile, "    mov ax, 1  ; Set true\n");
-            fprintf(asmFile, "gt_end_%d:\n", labelCounter++);
-            break;
-        case OP_GTE:
-            fprintf(asmFile, "    cmp ax, bx ; Greater than or equal comparison\n");
-            fprintf(asmFile, "    mov ax, 0  ; Assume false\n");
-            fprintf(asmFile, "    jge gte_true_%d\n", labelCounter);
-            fprintf(asmFile, "    jmp gte_end_%d\n", labelCounter);
-            fprintf(asmFile, "gte_true_%d:\n", labelCounter);
-            fprintf(asmFile, "    mov ax, 1  ; Set true\n");
-            fprintf(asmFile, "gte_end_%d:\n", labelCounter++);
-            break;
-              case OP_BITWISE_AND:
-            fprintf(asmFile, "    and ax, bx ; Bitwise AND\n");
-            break;
-            
-        case OP_BITWISE_OR:
-            fprintf(asmFile, "    or ax, bx ; Bitwise OR\n");
-            break;
-            
-        case OP_BITWISE_XOR:
-            fprintf(asmFile, "    xor ax, bx ; Bitwise XOR\n");
-            break;
-            
-        case OP_LEFT_SHIFT:
-            fprintf(asmFile, "    mov cx, bx ; Set shift count in CX\n");
-            fprintf(asmFile, "    shl ax, cl ; Shift left\n");
-            break;
-              case OP_RIGHT_SHIFT:
-            fprintf(asmFile, "    mov cx, bx ; Set shift count in CX\n");
-            fprintf(asmFile, "    sar ax, cl ; Shift right (arithmetic, preserves sign)\n");
-            break;
-            
-        case OP_COMMA:
-            // For comma operator, left operand is already evaluated (result discarded)
-            // and its value is in AX. Now evaluate right operand and its result becomes
-            // the overall result.
-            fprintf(asmFile, "    ; Comma operator - left operand already evaluated\n");
-            fprintf(asmFile, "    ; The right operand's value becomes the result\n");
-            generateExpression(node->right);
-            break;
-            
         default:
-            reportWarning(-1, "Unsupported binary operator: %d", node->operation.op);
+            codegenErrorSimple("Unsupported expression type: %d", node->type);
             break;
     }
 }
 
-// Generate code for a ternary conditional expression
-void generateTernaryExpression(ASTNode* node) {
-    if (!node || node->type != NODE_TERNARY) return;
-    
-    // Generate unique labels
-    char* falseLabel = generateLabel("ternary_false");
-    char* endLabel = generateLabel("ternary_end");
-    
-    fprintf(asmFile, "    ; Ternary conditional expression (condition ? true_expr : false_expr)\n");
+void generateIfStatement(ASTNode* node) {
+    char* elseLabel = malloc(32);
+    char* endLabel = malloc(32);
+    snprintf(elseLabel, 32, "_else_%d", codegen.labelCount);
+    snprintf(endLabel, 32, "_end_if_%d", codegen.labelCount);
+    codegen.labelCount++;
     
     // Generate condition
-    generateExpression(node->ternary.condition);
+    generateExpression(node->data.ifStmt.condition);
     
-    // Test the condition, if false jump to false branch
-    fprintf(asmFile, "    test ax, ax ; Test condition result\n");
-    fprintf(asmFile, "    jz %s ; Jump to false branch if condition is false\n", falseLabel);
+    // Test condition
+    const char* reg = getRegisterName(REG_AX, codegen.targetWidth);
+    emitInstruction("test %s, %s", reg, reg);
     
-    // Generate true expression
-    generateExpression(node->ternary.true_expr);
+    if (node->data.ifStmt.elseStmt) {
+        emitInstruction("jz %s", elseLabel);
+        generateStatement(node->data.ifStmt.thenStmt);
+        emitInstruction("jmp %s", endLabel);
+        emitLabel(elseLabel);
+        generateStatement(node->data.ifStmt.elseStmt);
+        emitLabel(endLabel);
+    } else {
+        emitInstruction("jz %s", endLabel);
+        generateStatement(node->data.ifStmt.thenStmt);
+        emitLabel(endLabel);
+    }
     
-    // Jump to end (skip false expression)
-    fprintf(asmFile, "    jmp %s ; Skip false branch\n", endLabel);
-    
-    // False branch
-    fprintf(asmFile, "%s: ; False branch\n", falseLabel);
-    
-    // Generate false expression
-    generateExpression(node->ternary.false_expr);
-    
-    // End label
-    fprintf(asmFile, "%s: ; End of ternary expression\n", endLabel);
-    
-    // Free the allocated labels
-    free(falseLabel);
+    free(elseLabel);
     free(endLabel);
 }
 
-// Generate code for a function call
-void generateFunctionCall(ASTNode* node) {
-    if (!node || node->type != NODE_CALL) return;
+void generateWhileStatement(ASTNode* node) {
+    char* loopLabel = malloc(32);
+    char* endLabel = malloc(32);
+    snprintf(loopLabel, 32, "_loop_%d", codegen.labelCount);
+    snprintf(endLabel, 32, "_end_loop_%d", codegen.labelCount);
+    codegen.labelCount++;
     
-    fprintf(asmFile, "    ; Function call to %s\n", node->call.func_name);
+    emitLabel(loopLabel);
     
-    // Count arguments and store them in an array
-    int argCount = 0;
-    ASTNode* arg = node->call.args;
-    ASTNode* args[32]; // Maximum 32 arguments
+    // Generate condition
+    generateExpression(node->data.whileStmt.condition);
     
-    // Collect arguments in an array first
-    while (arg) {
-        args[argCount++] = arg;
-        arg = arg->next;
-    }
-      // Push arguments in reverse order (right-to-left) as per C calling convention
-    for (int i = argCount - 1; i >= 0; i--) {
-        // Get argument type information to check if it's a long type
-        TypeInfo* typeInfo = getTypeInfoFromExpression(args[i]);
-        
-        // Generate code for each argument
-        generateExpression(args[i]);
-        
-        if (typeInfo && (typeInfo->type == TYPE_LONG || typeInfo->type == TYPE_UNSIGNED_LONG)) {
-            // For 32-bit long values, push high word (DX) then low word (AX)
-            fprintf(asmFile, "    push dx ; Argument %d (high word)\n", i + 1);
-            fprintf(asmFile, "    push ax ; Argument %d (low word)\n", i + 1);
-        } else {
-            // For normal values, just push AX
-            fprintf(asmFile, "    push ax ; Argument %d\n", i + 1);
-        }
-    }
+    // Test condition
+    const char* reg = getRegisterName(REG_AX, codegen.targetWidth);
+    emitInstruction("test %s, %s", reg, reg);
+    emitInstruction("jz %s", endLabel);
     
-    // Call the function
-    fprintf(asmFile, "    call _%s\n", node->call.func_name);
-      // Clean up stack (caller-cleanup convention)
-    if (argCount > 0) {
-        // Calculate how many bytes to clean up based on argument types
-        int bytesToCleanup = 0;
-        
-        for (int i = 0; i < argCount; i++) {
-            TypeInfo* typeInfo = getTypeInfoFromExpression(args[i]);
-            if (typeInfo && (typeInfo->type == TYPE_LONG || typeInfo->type == TYPE_UNSIGNED_LONG)) {
-                bytesToCleanup += 4; // 32-bit args take 4 bytes
-            } else {
-                bytesToCleanup += 2; // Normal args take 2 bytes
-            }
-        }
-        
-        fprintf(asmFile, "    add sp, %d ; Remove arguments\n", bytesToCleanup);
-    }
+    // Generate body
+    generateStatement(node->data.whileStmt.body);
+    
+    emitInstruction("jmp %s", loopLabel);
+    emitLabel(endLabel);
+    
+    free(loopLabel);
+    free(endLabel);
 }
 
-// Generate code for a return statement
+void generateForStatement(ASTNode* node) {
+    char* loopLabel = malloc(32);
+    char* continueLabel = malloc(32);
+    char* endLabel = malloc(32);
+    snprintf(loopLabel, 32, "_for_loop_%d", codegen.labelCount);
+    snprintf(continueLabel, 32, "_for_continue_%d", codegen.labelCount);
+    snprintf(endLabel, 32, "_for_end_%d", codegen.labelCount);
+    codegen.labelCount++;
+    
+    // Initialization
+    if (node->data.forStmt.init) {
+        if (node->data.forStmt.init->type == AST_VARIABLE_DECL) {
+            generateStatement(node->data.forStmt.init);
+        } else {
+            generateExpression(node->data.forStmt.init);
+        }
+    }
+    
+    emitLabel(loopLabel);
+    
+    // Condition
+    if (node->data.forStmt.condition) {
+        generateExpression(node->data.forStmt.condition);
+        const char* reg = getRegisterName(REG_AX, codegen.targetWidth);
+        emitInstruction("test %s, %s", reg, reg);
+        emitInstruction("jz %s", endLabel);
+    }
+    
+    // Body
+    generateStatement(node->data.forStmt.body);
+    
+    emitLabel(continueLabel);
+    
+    // Update
+    if (node->data.forStmt.update) {
+        generateExpression(node->data.forStmt.update);
+    }
+    
+    emitInstruction("jmp %s", loopLabel);
+    emitLabel(endLabel);
+    
+    free(loopLabel);
+    free(continueLabel);
+    free(endLabel);
+}
+
 void generateReturnStatement(ASTNode* node) {
-    if (!node || node->type != NODE_RETURN) return;
-    
-    fprintf(asmFile, "    ; Return statement\n");    // Generate code for return value if present
-    if (node->return_stmt.expr) {
-        // Check if the return value is a long type
-        TypeInfo* returnType = getTypeInfoFromExpression(node->return_stmt.expr);
-        
-        generateExpression(node->return_stmt.expr);
-        
-        if (returnType && (returnType->type == TYPE_LONG || returnType->type == TYPE_UNSIGNED_LONG)) {
-            // For 32-bit return values, the value is in DX:AX
-            fprintf(asmFile, "    ; Returning 32-bit long value in DX:AX\n");
-        } else {
-            // For regular types, return value is in AX
-            fprintf(asmFile, "    ; Return value in AX\n");
-        }
+    if (node->data.returnStmt.expression) {
+        generateExpression(node->data.returnStmt.expression);
+        // Result is in AX/EAX/RAX
     }
-      // For naked functions, don't generate automatic control flow
-    if (!currentFunctionIsNaked) {
-        // Jump to function epilogue
-        fprintf(asmFile, "    jmp _%s_exit\n", currentFunction);
+    
+    // Jump to the unified function epilogue
+    if (codegen.currentFunctionEpilogueLabel) {
+        emitInstruction("jmp %s", codegen.currentFunctionEpilogueLabel);
     } else {
-        fprintf(asmFile, "    ; Naked function - no automatic jump to epilogue generated\n");
+        // Fallback if called outside of a proper function context
+        const char* bp = getRegisterName(REG_BP, codegen.targetWidth);
+        const char* sp = getRegisterName(REG_SP, codegen.targetWidth);
+        emitInstruction("mov %s, %s", sp, bp);
+        emitInstruction("pop %s", bp);
+        emitInstruction("ret");
     }
 }
 
-// Generate code for a break statement
-void generateBreakStatement(ASTNode* node) {
-    if (!node || node->type != NODE_BREAK) return;
-    
-    LoopContext* context = getCurrentLoopContext();
-    if (!context) {
-        reportError(-1, "break statement not within a loop");
-        return;
+void generateCompoundStatement(ASTNode* node) {
+    for (int i = 0; i < node->data.compound.count; i++) {
+        generateStatement(node->data.compound.statements[i]);
     }
-    
-    fprintf(asmFile, "    ; Break statement\n");
-    fprintf(asmFile, "    jmp %s ; Jump to end of loop\n", context->breakLabel);
 }
 
-// Generate code for a continue statement
-void generateContinueStatement(ASTNode* node) {
-    if (!node || node->type != NODE_CONTINUE) return;
-    
-    LoopContext* context = getCurrentLoopContext();
-    if (!context) {
-        reportError(-1, "continue statement not within a loop");
-        return;
-    }
-    
-    fprintf(asmFile, "    ; Continue statement\n");
-    fprintf(asmFile, "    jmp %s ; Jump to loop condition/update\n", context->continueLabel);
-}
+void generateVariableDeclaration(ASTNode* node) {
+    emitComment("Variable declaration: %s", node->data.varDecl.name);
 
-// Generate code for an inline assembly block
-void generateAsmBlock(ASTNode* node) {
-    if (!node || node->type != NODE_ASM_BLOCK || !node->asm_block.code) return;
-    
-    fprintf(asmFile, "    ; Inline assembly block\n");
-    fprintf(asmFile, "%s\n", node->asm_block.code);
-}
-
-// Generate code for an inline assembly statement
-void generateAsmStmt(ASTNode* node) {
-    if (!node || node->type != NODE_ASM || !node->asm_stmt.code) return;
-    
-    fprintf(asmFile, "    ; Inline assembly statement\n");
-    
-    // If there are no operands, just output the code directly
-    if (node->asm_stmt.operand_count == 0) {
-        fprintf(asmFile, "    %s\n", node->asm_stmt.code);
-        return;
-    }
-    
-    // With operands, we need to:
-    // 1. First generate code to load the input operands into registers
-    // 2. Substitute %0, %1, etc. with appropriate register names
-    // 3. After the assembly code, store output operands back to their variables
-    fprintf(asmFile, "    ; Inline assembly with %d operands\n", node->asm_stmt.operand_count);
-    
-    // Arrays to store register assignments and operand types
-    char** registers = (char**)malloc(sizeof(char*) * node->asm_stmt.operand_count);
-    int* isOutput = (int*)malloc(sizeof(int) * node->asm_stmt.operand_count);
-    
-    if (!registers || !isOutput) {
-        fprintf(stderr, "Memory allocation failed for assembly registers\n");
-        if (registers) free(registers);
-        if (isOutput) free(isOutput);
-        return;
-    }
-      // Commonly used registers based on constraint type
-    const char* word_reg_choices[] = {"ax", "bx", "cx", "dx", "si", "di"};
-    const char* byte_reg_choices[] = {"al", "bl", "cl", "dl"}; // Byte-sized registers
-    int reg_index = 0;
-    
-    // Process operands and assign registers
-    for (int i = 0; i < node->asm_stmt.operand_count; i++) {
-        // Check constraint type
-        char* constraint = node->asm_stmt.constraints[i];
-        
-        // Determine if this is an output operand (constraint starts with =)
-        isOutput[i] = (constraint[0] == '=');
-        
-        // Skip the = for output operands to get the actual constraint
-        if (isOutput[i]) {
-            constraint++;
-        }
-          // Process input operands - generate code to load them
-        // For "q" constraint, we'll handle the loading specially to avoid the mov al, al issue
-        if (!isOutput[i] && (*constraint != 'q')) {
-            // Generate code to evaluate the operand
-            generateExpression(node->asm_stmt.operands[i]);
-        }
-          // Assign register based on constraint
-        if (*constraint == 'r' && (constraint[1] == 'b' || constraint[1] == '\0')) {
-            // Check if it's a byte register constraint ("rb") or word register ("r")
-            int is_byte_register = (constraint[1] == 'b');
-            
-            if (is_byte_register) {
-                // Byte register constraint ("rb")
-                if (reg_index < 4) { // Only 4 byte registers available
-                    registers[i] = strdupc(byte_reg_choices[reg_index++]);
-                } else {
-                    // Fall back to al if we run out of preferred registers
-                    registers[i] = strdupc("al");
-                }
-                
-                // For input operands, move result to the assigned byte register
-                if (!isOutput[i]) {
-                    // AL is the default result register's low byte
-                    if (strcmp(registers[i], "al") != 0) {
-                        fprintf(asmFile, "    mov %s, al ; Load byte input operand %d into register\n", 
-                                registers[i], i);
-                    }
-                }
-            } else {
-                // Standard word register constraint ("r")
-                if (reg_index < 6) {
-                    registers[i] = strdupc(word_reg_choices[reg_index++]);
-                } else {
-                    // Run out of preferred registers, just use ax
-                    registers[i] = strdupc("ax");
-                }
-                
-                // For input operands, move result to the assigned register
-                if (!isOutput[i] && strcmp(registers[i], "ax") != 0) {
-                    fprintf(asmFile, "    mov %s, ax ; Load word input operand %d into register\n", 
-                            registers[i], i);
-                }
-            }        } else if (*constraint == 'q') {
-            // 'q' is a GCC constraint that means a,b,c,d registers (in any size)
-            // In our case, we'll use it specifically for byte registers (al, bl, cl, dl)
-            if (reg_index < 4) { // Only 4 byte registers available
-                registers[i] = strdupc(byte_reg_choices[reg_index++]);
-            } else {
-                // Fall back to al if we run out of preferred registers
-                registers[i] = strdupc("al");
+    // If we're not inside a function, this is a global (file-scope) declaration.
+    if (!codegen.currentFunctionEpilogueLabel) {
+        // Handle externs: declare but do not define
+        if (node->data.varDecl.storageClass & STORAGE_EXTERN) {
+            if (node->data.varDecl.name) {
+                emitNasExtern(node->data.varDecl.name);
             }
-            
-            // For input operands, handle byte-sized parameters properly
-            if (!isOutput[i]) {
-                // Check if this is a parameter or variable that we can directly access
-                if (node->asm_stmt.operands[i]->type == NODE_IDENTIFIER) {
-                    char* varName = node->asm_stmt.operands[i]->identifier;
-                    int offset = getVariableOffset(varName);
-                    
-                    if (isParameter(varName)) {
-                        // For parameters, load the byte directly into the byte register
-                        fprintf(asmFile, "    mov %s, byte [bp+%d] ; Load byte parameter directly\n", 
-                                registers[i], -offset);
-                    } else if (offset > 0) {
-                        // For local variables, load the byte directly into the byte register
-                        fprintf(asmFile, "    mov %s, byte [bp-%d] ; Load byte local variable directly\n", 
-                                registers[i], offset);
-                    } else {
-                        // For other variables (likely globals), use standard approach
-                        generateExpression(node->asm_stmt.operands[i]);
-                        // If the assigned register is not al, move from al to the assigned register
-                        if (strcmp(registers[i], "al") != 0) {
-                            fprintf(asmFile, "    mov %s, al ; Load byte input operand %d into register ('q' constraint)\n", 
-                                    registers[i], i);
-                        }
-                    }
+            return;
+        }
+
+        // Emit into data (simple model; no .bss split yet)
+        emitNasSection(".data");
+
+        const char* name = node->data.varDecl.name ? node->data.varDecl.name : "_anon_global";
+        emitLabel(name);
+
+        int size = getTypeSize(node->data.varDecl.type, codegen.targetWidth);
+        if (size <= 0) size = (codegen.targetWidth / 8);
+
+        // Helper lambdas (as static inline local functions are not available in C89)
+        // Emit a sized constant
+        if (node->data.varDecl.initializer) {
+            ASTNode* init = node->data.varDecl.initializer;
+            // Special-case: char array initialized with string literal
+            if (node->data.varDecl.type && node->data.varDecl.type->baseType == TYPE_ARRAY &&
+                node->data.varDecl.type->elementType && node->data.varDecl.type->elementType->baseType == TYPE_CHAR &&
+                init->type == AST_STRING_LITERAL) {
+                // Emit the bytes and trailing 0; pad to array size if specified
+                const char* s = init->data.literal.stringValue ? init->data.literal.stringValue : "\"\"";
+                int strLen = 0;
+                unsigned char* bytes = decodeStringTokenToBytes(s, &strLen);
+                if (!bytes) {
+                    bytes = (unsigned char*)malloc(1);
+                    strLen = 0;
+                }
+                // Emit numeric bytes and trailing NUL
+                if (strLen > 0) {
+                    emitDbBytes(bytes, strLen);
+                    fprintf(codegen.output, ", 0\n");
                 } else {
-                    // For complex expressions, use the standard approach
-                    generateExpression(node->asm_stmt.operands[i]);
-                    // If the assigned register is not al, move from al to the assigned register
-                    if (strcmp(registers[i], "al") != 0) {
-                        fprintf(asmFile, "    mov %s, al ; Load byte input operand %d into register ('q' constraint)\n", 
-                                registers[i], i);
+                    fprintf(codegen.output, "    #db 0\n");
+                }
+                int used = strLen + 1; // include NUL
+                int total = size;
+                for (int i = used; i < total; i++) {
+                    fprintf(codegen.output, "    #db 0\n");
+                }
+                free(bytes);
+                return;
+            }
+
+            // Simple scalar constant initializers
+            if (init->type == AST_INTEGER_LITERAL || init->type == AST_CHAR_LITERAL || init->type == AST_BOOL_LITERAL) {
+                long long imm = init->data.literal.intValue;
+                if (size == 1) {
+                    fprintf(codegen.output, "    #db %lld\n", imm & 0xFF);
+                } else if (size == 2) {
+                    fprintf(codegen.output, "    #dw %lld\n", imm & 0xFFFF);
+                } else if (size == 4) {
+                    fprintf(codegen.output, "    #dd %lld\n", imm & 0xFFFFFFFFLL);
+                } else {
+                    // 8 or larger: emit dq for first word then zero-fill remainder if any
+                    fprintf(codegen.output, "    #dq %lld\n", imm);
+                    for (int i = 8; i < size; i++) {
+                        fprintf(codegen.output, "    #db 0\n");
                     }
+                }
+                return;
+            }
+
+            // Pointer to string literal: emit pointer to pooled string
+            if (init->type == AST_STRING_LITERAL && node->data.varDecl.type && node->data.varDecl.type->baseType == TYPE_POINTER) {
+                char* lbl = addStringLiteral(init->data.literal.stringValue ? init->data.literal.stringValue : "");
+                if (size == 2) {
+                    fprintf(codegen.output, "    #dw %s\n", lbl);
+                } else if (size == 4) {
+                    fprintf(codegen.output, "    #dd %s\n", lbl);
+                } else {
+                    fprintf(codegen.output, "    #dq %s\n", lbl);
+                }
+                free(lbl);
+                return;
+            }
+
+            // Fallback: unsupported initializer at global scope; zero-initialize
+        }
+
+        // No initializer or unsupported one: zero-fill
+        for (int i = 0; i < size; i++) {
+            fprintf(codegen.output, "    #db 0\n");
+        }
+        return;
+    }
+
+    // Otherwise, local (function-scope) declaration
+    int size = getTypeSize(node->data.varDecl.type, codegen.targetWidth);
+    // Simple heuristic: try to place small scalars in a caller-saved register
+    Register homeReg;
+    int placedInReg = 0;
+    if ((codegen.targetWidth == 64 && codegen.optimizationLevel >= 1 && (size == 1 || size == 2 || size == 4)) ||
+        (codegen.targetWidth == 32 && codegen.optimizationLevel >= 1 && size == 4) ||
+        (codegen.targetWidth == 16 && codegen.optimizationLevel >= 2 && size == 2)) {
+        placedInReg = addRegLocal(node->data.varDecl.name, size, &homeReg);
+    }
+    int offset = 0;
+    if (!placedInReg) {
+        // Stack local path
+        const char* sp = getRegisterName(REG_SP, codegen.targetWidth);
+        emitInstruction("sub %s, %d", sp, size);
+        offset = addLocal(node->data.varDecl.name, size);
+        // Maintain 16-byte alignment of RSP after each allocation (SysV AMD64)
+        int mis = currentStackOffset % 16;
+        if (mis != 0) {
+            int pad = 16 - mis;
+            emitInstruction("sub %s, %d", sp, pad);
+            currentStackOffset += pad;
+        }
+    }
+
+    // Initialize if there's an initializer
+    if (node->data.varDecl.initializer) {
+        if (placedInReg && (node->data.varDecl.initializer->type == AST_INTEGER_LITERAL ||
+                            node->data.varDecl.initializer->type == AST_CHAR_LITERAL ||
+                            node->data.varDecl.initializer->type == AST_BOOL_LITERAL)) {
+            long long imm = node->data.varDecl.initializer->data.literal.intValue;
+            emitInstruction("mov %s, %lld", reg_by_size(homeReg, size), imm);
+        } else {
+            generateExpression(node->data.varDecl.initializer);
+            const char* val = ax_by_size(size);
+            if (placedInReg) {
+                emitInstruction("mov %s, %s", reg_by_size(homeReg, size), val);
+            } else {
+                const char* bp = getRegisterName(REG_BP, codegen.targetWidth);
+                emitInstruction("mov [%s-%d], %s", bp, offset, val);
+            }
+        }
+    }
+}
+
+void generateFunctionDeclaration(ASTNode* node) {
+    // Function label (prefix underscore for C-style symbol names)
+    const char* rawName = node->data.funcDecl.name;
+    if (rawName && rawName[0] != '_') {
+        char prefixed[512];
+        snprintf(prefixed, sizeof(prefixed), "_%s", rawName);
+        emitLabel(prefixed);
+        // Capture anchor for special marker names
+        if (strcmp(prefixed, "__NCC_STRING_LOC") == 0 || strcmp(prefixed, "_NCC_STRING_LOC") == 0) {
+            // Set anchor and emit strings here if any and not yet emitted
+            codegen.stringAnchorLabel = strdup(prefixed);
+        }
+    } else {
+        emitLabel(rawName);
+        if (rawName && (strcmp(rawName, "__NCC_STRING_LOC") == 0 || strcmp(rawName, "_NCC_STRING_LOC") == 0)) {
+            codegen.stringAnchorLabel = strdup(rawName);
+        }
+    }
+    
+    // Function prologue (skip if [[naked]])
+    const char* bp = getRegisterName(REG_BP, codegen.targetWidth);
+    const char* sp = getRegisterName(REG_SP, codegen.targetWidth);
+    int isNaked = node->data.funcDecl.isNaked;
+    if (!isNaked) {
+        emitInstruction("push %s", bp);
+        emitInstruction("mov %s, %s", bp, sp);
+        // Preserve callee-saved RBX on x64 (we frequently use it for temps)
+        savedRBXForThisFunction = 0;
+        if (codegen.targetWidth == 64) {
+            emitInstruction("push rbx");
+            savedRBXForThisFunction = 1;
+        }
+    }
+    // Reset locals for this function scope
+    resetLocals();
+    // After establishing frame, record parameter homes: on x64 SysV use registers for first 6 args
+    if (node->data.funcDecl.paramCount > 0 && node->data.funcDecl.parameters) {
+        int slotSize = codegen.targetWidth / 8;
+        int firstParamOff;
+        if (codegen.targetWidth == 64) {
+            // Return addr at +8; if any args spilled to stack (beyond 6), they start at +16
+            firstParamOff = 16;
+        } else if (codegen.targetWidth == 32) {
+            firstParamOff = 8;
+        } else {
+            firstParamOff = 4;
+        }
+        params = (ParamEntry*)malloc(sizeof(ParamEntry) * node->data.funcDecl.paramCount);
+        paramCountTracked = 0;
+
+        if (codegen.targetWidth == 64) {
+            Register argRegs64[] = { REG_DI, REG_SI, REG_DX, REG_CX, REG_R8, REG_R9 };
+            int regArgCount = 6;
+            int off = firstParamOff;
+            for (int i = 0; i < node->data.funcDecl.paramCount; i++) {
+                Parameter* p = node->data.funcDecl.parameters[i];
+                if (!p || !p->name) continue;
+                if (i < regArgCount) {
+                    // Home in the incoming argument register
+                    addExistingRegLocal(p->name, argRegs64[i]);
+                } else {
+                    // Stack arg at [bp+off]
+                    params[paramCountTracked].name = strdup(p->name);
+                    params[paramCountTracked].offset = off;
+                    paramCountTracked++;
+                    off += slotSize;
                 }
             }
         } else {
-            // Default to ax for unknown constraints
-            registers[i] = strdupc("ax");
-        }
-    }
-    
-    // Now process the assembly code string, replacing %0, %1, etc.
-    char* asmCode = strdupc(node->asm_stmt.code);
-    char* result = (char*)malloc(strlen(asmCode) * 2); // Allocate double space for substitutions
-    if (!result) {
-        fprintf(stderr, "Memory allocation failed for assembly code processing\n");
-        free(asmCode);
-        for (int i = 0; i < node->asm_stmt.operand_count; i++) {
-            free(registers[i]);
-        }
-        free(registers);
-        free(isOutput);
-        return;
-    }
-    
-    result[0] = '\0';
-    
-    // Process the string, replacing %0, %1, etc. with register names
-    char* p = asmCode;
-    while (*p) {
-        if (*p == '%' && *(p+1) >= '0' && *(p+1) <= '9') {
-            int operand_num = *(p+1) - '0';
-            if (operand_num < node->asm_stmt.operand_count) {
-                strcat(result, registers[operand_num]);
-                p += 2;
-            } else {
-                // Invalid operand number, just copy the %
-                char tmp[2] = {*p, '\0'};
-                strcat(result, tmp);
-                p++;
+            int off = firstParamOff;
+            for (int i = 0; i < node->data.funcDecl.paramCount; i++) {
+                Parameter* p = node->data.funcDecl.parameters[i];
+                if (!p || !p->name) continue;
+                params[paramCountTracked].name = strdup(p->name);
+                params[paramCountTracked].offset = off;
+                paramCountTracked++;
+                off += slotSize;
             }
+        }
+    }
+    // Prepare unified epilogue label for this function
+    char epilogueLabelBuf[32];
+    snprintf(epilogueLabelBuf, sizeof(epilogueLabelBuf), "_func_epilogue_%d", codegen.labelCount++);
+    char* savedEpilogue = codegen.currentFunctionEpilogueLabel;
+    codegen.currentFunctionEpilogueLabel = strdup(epilogueLabelBuf);
+    
+    // Generate function body
+    if (node->data.funcDecl.body) {
+        generateStatement(node->data.funcDecl.body);
+    }
+
+    // Unified function epilogue (handles both implicit and explicit returns)
+    emitLabel(codegen.currentFunctionEpilogueLabel);
+    if (!isNaked) {
+        if (savedRBXForThisFunction && codegen.targetWidth == 64) {
+            // Reset stack to base, step to saved rbx, restore, then pop rbp
+            emitInstruction("mov %s, %s", sp, bp);
+            emitInstruction("sub %s, 8", sp);
+            emitInstruction("pop rbx");
+            emitInstruction("pop %s", bp);
+            emitInstruction("ret");
         } else {
-            char tmp[2] = {*p, '\0'};
-            strcat(result, tmp);
-            p++;
+            emitInstruction("mov %s, %s", sp, bp);
+            emitInstruction("pop %s", bp);
+            emitInstruction("ret");
         }
+    } else {
+        // Naked: absolutely nothing
     }
-    
-    // Output the processed assembly code
-    fprintf(asmFile, "    %s\n", result);
-    
-    // After executing the assembly code, store output operands back to their variables
-    for (int i = 0; i < node->asm_stmt.operand_count; i++) {
-        if (isOutput[i]) {
-            // This is an output operand - store the register value back to the variable
-            ASTNode* operand = node->asm_stmt.operands[i];
-            
-            if (operand->type == NODE_IDENTIFIER) {
-                // Get variable name and offset
-                char* varName = operand->identifier;
-                int offset = getVariableOffset(varName);
-                
-                // Check if it's a parameter or local variable
-                if (isParameter(varName)) {
-                    fprintf(asmFile, "    mov [bp+%d], %s ; Store output operand %d to parameter %s\n", 
-                            -offset, registers[i], i, varName);
+
+    // Restore prior context
+    free(codegen.currentFunctionEpilogueLabel);
+    codegen.currentFunctionEpilogueLabel = savedEpilogue;
+    // Ensure locals are cleared for next function (already reset at start)
+    resetLocals();
+    savedRBXForThisFunction = 0;
+
+    // After emitting the marker function body, if this is the string anchor and not yet emitted, flush strings
+    if (!codegen.stringsEmitted) {
+        const char* nameToCheck = rawName && rawName[0] ? rawName : NULL;
+        if (nameToCheck && (
+            strcmp(nameToCheck, "_NCC_STRING_LOC") == 0 || strcmp(nameToCheck, "__NCC_STRING_LOC") == 0)) {
+            // Emit pending string literals right here
+            StringLiteral* current = codegen.stringLiterals;
+            while (current) {
+                emitLabel(current->label);
+                int blen = 0;
+                unsigned char* b = decodeStringTokenToBytes(current->value, &blen);
+                if (b && blen > 0) {
+                    emitDbBytes(b, blen);
+                    fprintf(codegen.output, ", 0\n");
                 } else {
-                    fprintf(asmFile, "    mov [bp-%d], %s ; Store output operand %d to local variable %s\n", 
-                            offset, registers[i], i, varName);
+                    fprintf(codegen.output, "    #db 0\n");
                 }
-            } else {
-                // For complex output expressions (dereferencing pointers, etc.)
-                fprintf(asmFile, "    ; Warning: Complex output operand not fully supported\n");
+                if (b) free(b);
+                current = current->next;
             }
+            codegen.stringsEmitted = 1;
         }
     }
+}
+
+void generateStatement(ASTNode* node) {
+    if (!node) return;
     
-    // Clean up
-    free(asmCode);
-    free(result);
-    free(isOutput);
-    for (int i = 0; i < node->asm_stmt.operand_count; i++) {
-        free(registers[i]);
+    switch (node->type) {
+        case AST_EXPRESSION_STMT:
+            generateExpression(node->data.returnStmt.expression);
+            break;
+        case AST_IF_STMT:
+            generateIfStatement(node);
+            break;
+        case AST_WHILE_STMT:
+            generateWhileStatement(node);
+            break;
+        case AST_FOR_STMT:
+            generateForStatement(node);
+            break;
+        case AST_RETURN_STMT:
+            generateReturnStatement(node);
+            break;
+        case AST_COMPOUND_STMT:
+            generateCompoundStatement(node);
+            break;
+        case AST_VARIABLE_DECL:
+            generateVariableDeclaration(node);
+            break;
+        case AST_FUNCTION_DECL:
+            generateFunctionDeclaration(node);
+            break;
+        case AST_BREAK_STMT:
+            emitComment("Break statement - would need loop context");
+            break;
+        case AST_CONTINUE_STMT:
+            emitComment("Continue statement - would need loop context");
+            break;
+        case AST_INLINE_ASM:
+            generateInlineAssembly(node);
+            break;
+        default:
+            codegenErrorSimple("Unsupported statement type: %d", node->type);
+            break;
     }
-    free(registers);
+}
+
+// Public interface
+void initCodeGenerator(TargetArch arch, OutputFormat format, FILE* output, unsigned long long originAddress) {
+    memset(&codegen, 0, sizeof(CodeGenerator));
+    
+    codegen.targetArch = arch;
+    codegen.outputFormat = format;
+    codegen.output = output;
+    
+    switch (arch) {
+        case ARCH_X86_16: codegen.targetWidth = 16; break;
+        case ARCH_X86_32: codegen.targetWidth = 32; break;
+        case ARCH_X86_64: codegen.targetWidth = 64; break;
+        default: codegen.targetWidth = 32; break;
+    }
+    
+    codegen.labelCount = 0;
+    codegen.stringLiteralCount = 0;
+    codegen.instructionCount = 0;
+    codegen.stringLiterals = NULL;
+    codegen.stringsEmitted = 0;
+    codegen.stringAnchorLabel = NULL;
+    
+    // Initialize options
+    codegen.optimizationLevel = 0;
+    codegen.forceStrict16 = 0;
+
+    // Initialize register allocation
+    for (int i = 0; i < MAX_REGISTERS; i++) {
+        codegen.registerInUse[i] = 0;
+    }
+    
+    // Emit NAS directives
+    emitNasWidth(codegen.targetWidth);
+    emitNasOrigin(originAddress);
+
+    if (format == FORMAT_ELF) {
+        emitNasSection(".text");
+    }
+}
+
+void cleanupCodeGenerator(void) {
+    // Clean up string literals
+    StringLiteral* current = codegen.stringLiterals;
+    while (current) {
+        StringLiteral* next = current->next;
+        free(current->label);
+        free(current->value);
+        free(current);
+        current = next;
+    }
+    
+    memset(&codegen, 0, sizeof(CodeGenerator));
+}
+
+void generateCode(ASTNode* ast) {
+    if (!ast) return;
+    
+    // Generate main program
+    if (ast->type == AST_PROGRAM) {
+        for (int i = 0; i < ast->data.compound.count; i++) {
+            generateStatement(ast->data.compound.statements[i]);
+        }
+    } else {
+        generateStatement(ast);
+    }
+    
+    // Emit string literals section (only if not already emitted via _NCC_STRING_LOC)
+    if (codegen.stringLiterals && !codegen.stringsEmitted) {
+        emitNasSection(".data");
+        
+        StringLiteral* current = codegen.stringLiterals;
+        while (current) {
+            emitLabel(current->label);
+            int blen = 0;
+            unsigned char* b = decodeStringTokenToBytes(current->value, &blen);
+            if (b && blen > 0) {
+                emitDbBytes(b, blen);
+                fprintf(codegen.output, ", 0\n");
+            } else {
+                fprintf(codegen.output, "    #db 0\n");
+            }
+            if (b) free(b);
+            current = current->next;
+        }
+        codegen.stringsEmitted = 1;
+    }
+}
+
+void emitAssembly(const char* instruction) {
+    fprintf(codegen.output, "    %s\n", instruction);
+    codegen.instructionCount++;
+}
+
+void emitAssemblyLabel(const char* label) {
+    emitLabel(label);
+}
+
+int getTargetWidth(void) {
+    return codegen.targetWidth;
+}
+
+TargetArch getTargetArch(void) {
+    return codegen.targetArch;
+}
+
+OutputFormat getOutputFormat(void) {
+    return codegen.outputFormat;
+}
+
+// Simple finalizeCodeGen function
+void finalizeCodeGen(void) {
+    if (codegen.output && codegen.output != stdout) {
+        fclose(codegen.output);
+        codegen.output = NULL;
+    }
+}
+
+// Wrapper functions for main.c compatibility
+void initCodeGen(const char* outputFilename, unsigned long long originAddress, TargetArch targetArch) {
+    FILE* output = stdout;
+    if (outputFilename && strcmp(outputFilename, "-") != 0) {
+        output = fopen(outputFilename, "w");
+        if (!output) {
+            fprintf(stderr, "Error: Cannot open output file %s\n", outputFilename);
+            exit(1);
+        }
+    }
+    initCodeGenerator(targetArch, FORMAT_FLAT, output, originAddress);
+    // Store origin address somewhere if needed
+    
+}
+
+void setTargetWidth(int width) {
+    switch (width) {
+        case 16: codegen.targetArch = ARCH_X86_16; break;
+        case 32: codegen.targetArch = ARCH_X86_32; break;
+        case 64: codegen.targetArch = ARCH_X86_64; break;
+        default: codegen.targetArch = ARCH_X86_32; break;
+    }
+}
+
+void setDebugMode(int generateDebugInfo) {
+    // Store debug mode somewhere if needed
+    (void)generateDebugInfo; // Silence unused parameter warning
+}
+
+// Additional wrapper functions
+void setOptimizationLevel(OptimizationLevel level, int debugMode) {
+    // Store optimization level somewhere if needed  
+    codegen.optimizationLevel = (int)level;
+    (void)debugMode;
+}
+
+void setOutputFormat(OutputFormat format) {
+    codegen.outputFormat = format;
+}
+
+void setCStandard(CStandard standard) {
+    // Store C standard somewhere if needed
+    (void)standard;
+}
+
+void setWarningMode(int enableWarnings, int warningsAsErrors) {
+    // Store warning mode somewhere if needed
+    (void)enableWarnings;
+    (void)warningsAsErrors;
+}
+
+void setForceStrict16(int enable) {
+    codegen.forceStrict16 = enable ? 1 : 0;
 }

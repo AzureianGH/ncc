@@ -1,6 +1,5 @@
 #define BITS16
 #include "test/bootloader.h"
-#include "test/stdarg.h"
 #include "test/color.h"
 
 #define ACTION_OKAY 0
@@ -508,8 +507,8 @@ void initPIT()
 uint16_t sizeOfKernel()
 {
     uint16_t size = 0;
-    __asm("mov ax, __KERNEL_START");
-    __asm("mov bx, __KERNEL_END");
+    __asm("mov ax, _KERNEL_START");
+    __asm("mov bx, _KERNEL_END");
     __asm("sub bx, ax");
     __asm("mov %0, bx" : : "=r"(size));
     return size;

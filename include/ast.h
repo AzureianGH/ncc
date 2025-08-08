@@ -1,273 +1,415 @@
 #ifndef AST_H
 #define AST_H
 
-#include <stdio.h>
+#include <stddef.h>
+#include <stdint.h>
 
-// Data types supported by the compiler
+// Forward declarations
+typedef struct ASTNode ASTNode;
+typedef struct Symbol Symbol;
+typedef struct SymbolTable SymbolTable;
+
+// C99 Data Types
 typedef enum {
-    TYPE_INT,           // 16-bit signed integer
-    TYPE_SHORT,         // 16-bit signed integer (alias)
-    TYPE_UNSIGNED_INT,  // 16-bit unsigned integer
-    TYPE_UNSIGNED_SHORT,// 16-bit unsigned integer (alias)
-    TYPE_LONG,          // 32-bit signed integer
-    TYPE_UNSIGNED_LONG, // 32-bit unsigned integer
-    TYPE_CHAR,          // 8-bit signed integer
-    TYPE_UNSIGNED_CHAR, // 8-bit unsigned integer
-    TYPE_VOID,          // void type
-    TYPE_FAR_POINTER,   // Far pointer (segment:offset)
-    TYPE_BOOL,          // C23 bool type (1 byte)
-    TYPE_STRUCT         // struct type
+    TYPE_VOID,
+    TYPE_CHAR,
+    TYPE_SHORT,
+    TYPE_INT,
+    TYPE_LONG,
+    TYPE_LONG_LONG,
+    TYPE_FLOAT,
+    TYPE_DOUBLE,
+    TYPE_LONG_DOUBLE,
+    TYPE_BOOL,              // C99 _Bool
+    TYPE_COMPLEX_FLOAT,     // C99 complex types
+    TYPE_COMPLEX_DOUBLE,
+    TYPE_COMPLEX_LONG_DOUBLE,
+    TYPE_POINTER,
+    TYPE_ARRAY,
+    TYPE_STRUCT,
+    TYPE_UNION,
+    TYPE_ENUM,
+    TYPE_FUNCTION,
+    TYPE_TYPEDEF,
+    TYPE_AUTO,              // C99 type inference placeholder
+    TYPE_UNKNOWN
 } DataType;
 
-// AST node types
-typedef enum {    NODE_PROGRAM,      // Program root
-    NODE_FUNCTION,     // Function definition
-    NODE_BLOCK,        // Code block
-    NODE_DECLARATION,  // Variable declaration
-    NODE_ASSIGNMENT,   // Assignment
-    NODE_BINARY_OP,    // Binary operation
-    NODE_UNARY_OP,     // Unary operation
-    NODE_IDENTIFIER,   // Variable identifier
-    NODE_LITERAL,      // Constant literal
-      NODE_RETURN,       // Return statement
-    NODE_BREAK,        // Break statement  
-    NODE_CONTINUE,     // Continue statement
-    NODE_IF,           // If statement
-    NODE_WHILE,        // While loop
-    NODE_DO_WHILE,     // Do-while loop
-    NODE_FOR,          // For loop
-    NODE_CALL,         // Function call
-    NODE_ASM_BLOCK,    // Inline assembly block
-    NODE_ASM,          // Inline assembly
-    NODE_EXPRESSION,   // Expression statement
-    NODE_TERNARY,      // Ternary conditional expression (? :)
-    NODE_STRUCT_DEF,   // Struct definition
-    NODE_MEMBER_ACCESS // Struct member access
-} NodeType;
+// Type qualifiers
+typedef enum {
+    QUAL_NONE = 0,
+    QUAL_CONST = 1 << 0,
+    QUAL_VOLATILE = 1 << 1,
+    QUAL_RESTRICT = 1 << 2   // C99 restrict qualifier
+} TypeQualifier;
+
+// Storage class specifiers
+typedef enum {
+    STORAGE_NONE = 0,
+    STORAGE_AUTO = 1 << 0,
+    STORAGE_REGISTER = 1 << 1,
+    STORAGE_STATIC = 1 << 2,
+    STORAGE_EXTERN = 1 << 3,
+    STORAGE_TYPEDEF = 1 << 4,
+    STORAGE_INLINE = 1 << 5   // C99 inline
+} StorageClass;
+
+// Function specifiers
+typedef enum {
+    FUNC_NONE = 0,
+    FUNC_INLINE = 1 << 0,     // C99 inline
+    FUNC_NORETURN = 1 << 1    // C99 _Noreturn
+} FunctionSpecifier;
+
+// Type information
+typedef struct TypeInfo {
+    DataType baseType;
+    TypeQualifier qualifiers;
+    StorageClass storageClass;
+    FunctionSpecifier funcSpecifiers;
+    
+    // For arrays
+    int arraySize;
+    struct TypeInfo* elementType;
+    
+    // For pointers
+    struct TypeInfo* pointsTo;
+    
+    // For functions
+    struct TypeInfo* returnType;
+    struct TypeInfo** paramTypes;
+    int paramCount;
+    int isVariadic;           // C99 variadic functions
+    
+    // For structs/unions
+    char* structName;
+    struct Symbol** members;
+    int memberCount;
+    
+    // For enums
+    char* enumName;
+    struct Symbol** enumValues;
+    int enumCount;
+    
+    // Size and alignment info
+    int size;
+    int alignment;
+} TypeInfo;
+
+// AST Node Types - Full C99 Support
+typedef enum {
+    // Literals
+    AST_INTEGER_LITERAL,
+    AST_FLOAT_LITERAL,
+    AST_DOUBLE_LITERAL,
+    AST_LONG_DOUBLE_LITERAL,
+    AST_CHAR_LITERAL,
+    AST_STRING_LITERAL,
+    AST_WIDE_STRING_LITERAL,   // C99 wide strings
+    AST_BOOL_LITERAL,          // C99 true/false
+    
+    // Identifiers
+    AST_IDENTIFIER,
+    
+    // Expressions
+    AST_BINARY_OP,
+    AST_UNARY_OP,
+    AST_TERNARY_OP,           // condition ? true : false
+    AST_ASSIGNMENT,
+    AST_COMPOUND_ASSIGNMENT,  // +=, -=, etc.
+    AST_FUNCTION_CALL,
+    AST_ARRAY_ACCESS,
+    AST_MEMBER_ACCESS,        // struct.member
+    AST_POINTER_ACCESS,       // struct->member
+    AST_CAST,
+    AST_SIZEOF,
+    AST_ALIGNOF,              // C99 _Alignof
+    AST_COMPOUND_LITERAL,     // C99 (int[]){1,2,3}
+    AST_DESIGNATED_INIT,      // C99 .member = value
+    AST_VA_ARG,               // C99 va_arg
+    
+    // Statements
+    AST_EXPRESSION_STMT,
+    AST_COMPOUND_STMT,
+    AST_IF_STMT,
+    AST_WHILE_STMT,
+    AST_DO_WHILE_STMT,
+    AST_FOR_STMT,
+    AST_SWITCH_STMT,
+    AST_CASE_STMT,
+    AST_DEFAULT_STMT,
+    AST_BREAK_STMT,
+    AST_CONTINUE_STMT,
+    AST_RETURN_STMT,
+    AST_GOTO_STMT,
+    AST_LABEL_STMT,
+    
+    // Declarations
+    AST_VARIABLE_DECL,
+    AST_FUNCTION_DECL,
+    AST_STRUCT_DECL,
+    AST_UNION_DECL,
+    AST_ENUM_DECL,
+    AST_TYPEDEF_DECL,
+    
+    // Program structure
+    AST_PROGRAM,
+    AST_TRANSLATION_UNIT,
+    
+    // C99 specific
+    AST_INLINE_ASM,           // Inline assembly
+    AST_PRAGMA,               // #pragma directives
+    AST_STATIC_ASSERT,        // C99 _Static_assert
+    AST_GENERIC_SELECTION,    // C99 _Generic
+    
+    // Array and struct initializers
+    AST_INITIALIZER_LIST,
+    AST_DESIGNATED_INITIALIZER,
+    
+    // Variable length arrays (C99)
+    AST_VLA_DECL,
+    
+    AST_UNKNOWN
+} ASTNodeType;
 
 // Binary operators
 typedef enum {
-    OP_ADD,  // +
-    OP_SUB,  // -
-    OP_MUL,  // *
-    OP_DIV,  // /
-    OP_MOD,  // %
-    OP_EQ,   // ==
-    OP_NEQ,  // !=    
-    OP_LAND, // logical AND (&&)
-    OP_LOR,  // logical OR (||)
-    OP_LT,   // <
-    OP_LTE,  // <=
-    OP_GT,   // >
-    OP_GTE,  // >=
-    OP_BITWISE_AND, // &
-    OP_BITWISE_OR,  // |
-    OP_BITWISE_XOR, // ^
-    OP_LEFT_SHIFT,  // <<
-    OP_RIGHT_SHIFT, // >>    
-    OP_PLUS_ASSIGN, // +=
-    OP_MINUS_ASSIGN,// -=
-    OP_MUL_ASSIGN,  // *=
-    OP_DIV_ASSIGN,  // /=
-    OP_MOD_ASSIGN,  // %=
-    OP_LEFT_SHIFT_ASSIGN,  // <<=
-    OP_RIGHT_SHIFT_ASSIGN, // >>=
-    OP_DOT,         // . (struct member access)
-    OP_ARROW,       // -> (struct member access through pointer)
-    OP_COMMA        // , (comma operator)
-} OperatorType;
+    // Arithmetic
+    BIN_ADD, BIN_SUB, BIN_MUL, BIN_DIV, BIN_MOD,
+    
+    // Bitwise
+    BIN_BITWISE_AND, BIN_BITWISE_OR, BIN_BITWISE_XOR,
+    BIN_LEFT_SHIFT, BIN_RIGHT_SHIFT,
+    
+    // Logical
+    BIN_LOGICAL_AND, BIN_LOGICAL_OR,
+    
+    // Comparison
+    BIN_EQ, BIN_NE, BIN_LT, BIN_LE, BIN_GT, BIN_GE,
+    
+    // Assignment
+    BIN_ASSIGN,
+    BIN_ADD_ASSIGN, BIN_SUB_ASSIGN, BIN_MUL_ASSIGN,
+    BIN_DIV_ASSIGN, BIN_MOD_ASSIGN,
+    BIN_AND_ASSIGN, BIN_OR_ASSIGN, BIN_XOR_ASSIGN,
+    BIN_LEFT_SHIFT_ASSIGN, BIN_RIGHT_SHIFT_ASSIGN,
+    
+    // Other
+    BIN_COMMA
+} BinaryOperator;
 
 // Unary operators
 typedef enum {
-    UNARY_ADDRESS_OF,    // &x
-    UNARY_DEREFERENCE,   // *x
-    UNARY_NEGATE,        // -x
-    UNARY_NOT,           // !x
-    UNARY_BITWISE_NOT,   // ~x
-    UNARY_SIZEOF,        // sizeof(x)
-    UNARY_CAST,          // (type)x
-    PREFIX_INCREMENT,    // ++x
-    PREFIX_DECREMENT,    // --x
-    POSTFIX_INCREMENT,   // x++
-    POSTFIX_DECREMENT    // x--
-} UnaryOperatorType;
-
-// Forward declaration
-struct ASTNode;
-
-// Struct info forward declaration
-typedef struct StructInfo StructInfo;
-
-// Type information structure
-typedef struct TypeInfo {
-    DataType type;
-    int is_pointer;
-    int is_far_pointer;
-    int is_array;
-    int array_size;
-    int is_stackframe;  // Function uses stackframe with register preservation
-    int is_far;         // Function is far called
-    int is_static;      // Has static storage duration
-    StructInfo* struct_info; // Pointer to struct info when type is TYPE_STRUCT
-} TypeInfo;
-
-// Struct member declaration
-typedef struct StructMember {
-    char* name;                     // Member name
-    TypeInfo type_info;             // Member type
-    int offset;                     // Byte offset within struct
-    struct StructMember* next;      // Next member in linked list
-} StructMember;
-
-// Struct definition information
-struct StructInfo {
-    char* name;                     // Name of the struct
-    StructMember* members;          // List of struct members
-    int size;                       // Total size of the struct in bytes
-};
-
-// Function information structure
-typedef struct {
-    TypeInfo return_type;
-    int param_count;
-    int is_stackframe;  // Uses stackframe with register preservation
-    int is_far;        // Is a far function
-    int is_naked;      // Function is naked (no prologue/epilogue)
-    int is_static;     // Function has internal linkage
-    int is_deprecated; // Function is deprecated (1 if true)
-    char* deprecation_msg; // Deprecation message (NULL if not deprecated)
-    int is_variadic;   // Function accepts variable arguments (...)
-} FunctionInfo;
+    // Arithmetic
+    UNARY_PLUS, UNARY_MINUS, UNARY_NOT, UNARY_BITWISE_NOT,
+    
+    // Memory
+    UNARY_ADDRESS_OF, UNARY_DEREFERENCE,
+    
+    // Increment/Decrement
+    UNARY_PRE_INCREMENT, UNARY_POST_INCREMENT,
+    UNARY_PRE_DECREMENT, UNARY_POST_DECREMENT,
+    
+    // Type operations
+    UNARY_SIZEOF, UNARY_ALIGNOF
+} UnaryOperator;
 
 // AST Node structure
-typedef struct ASTNode {
-    NodeType type;
-    struct ASTNode* left;
-    struct ASTNode* right;
-    struct ASTNode* next; // For lists of nodes
+struct ASTNode {
+    ASTNodeType type;
+    TypeInfo* typeInfo;
     
+    // Source location info
+    int line;
+    int column;
+    char* filename;
+    
+    // Node-specific data
     union {
-        // For literals
+        // Literals
         struct {
-            DataType data_type;
-            union {
-                int int_value;
-                char char_value;
-                unsigned int uint_value;
-                char* string_value;
-                struct {
-                    int segment;
-                    int offset;
-                };
-            };
+            long long intValue;
+            double floatValue;
+            char* stringValue;
+            int stringLength;
         } literal;
         
-        // For identifiers
-        char* identifier;
+        // Identifiers
+        struct {
+            char* name;
+            Symbol* symbol;
+        } identifier;
         
-        // For variable declarations
+        // Binary operations
         struct {
-            char* var_name;
-            TypeInfo type_info;
-            struct ASTNode* initializer;
-        } declaration;
-          // For binary operations
-        struct {
-            OperatorType op;
-        } operation;
-          // For unary operations
-        struct {
-            UnaryOperatorType op;
-            DataType cast_type;   // For UNARY_CAST operations
-        } unary_op;
-        // For function definitions
-        struct {
-            char* func_name;
-            FunctionInfo info;
-            struct ASTNode* body;
-            struct ASTNode* params;
-        } function;
-          // For inline assembly block (between braces)
-        struct {
-            char* code;
-        } asm_block;
-          // For inline assembly statement
-        struct {
-            char* code;               // The assembly instruction template
-            struct ASTNode** operands; // Array of operand expressions
-            char** constraints;        // Array of constraint strings (e.g., "r", "m")
-            int operand_count;         // Number of operands
-        } asm_stmt;
+            BinaryOperator op;
+            ASTNode* left;
+            ASTNode* right;
+        } binary;
         
-        // For function calls
+        // Unary operations
         struct {
-            char* func_name;
-            struct ASTNode* args;
-            int arg_count;
-        } call;
-          // For return statements
-        struct {
-            struct ASTNode* expr;
-        } return_stmt;
-          // For for loops
-        struct {
-            struct ASTNode* init;      // Initialization statement
-            struct ASTNode* condition; // Loop condition
-            struct ASTNode* update;    // Update statement
-            struct ASTNode* body;      // Loop body
-        } for_loop;        // For while loops
-        struct {
-            struct ASTNode* condition; // Loop condition
-            struct ASTNode* body;      // Loop body
-        } while_loop;
+            UnaryOperator op;
+            ASTNode* operand;
+        } unary;
         
-        // For do-while loops
+        // Ternary (conditional) operation
         struct {
-            struct ASTNode* condition; // Loop condition
-            struct ASTNode* body;      // Loop body
-        } do_while_loop;
-        
-        // For if statements
-        struct {
-            struct ASTNode* condition; // If condition
-            struct ASTNode* if_body;   // If body (true branch)
-            struct ASTNode* else_body; // Else body (false branch), NULL if no else
-        } if_stmt;
-          // For assignment statements
-        struct {
-            OperatorType op;  // The operation to perform (OP_PLUS_ASSIGN, etc.)
-        } assignment;
-          // For ternary conditional expressions (condition ? expr_if_true : expr_if_false)
-        struct {
-            struct ASTNode* condition;  // Condition expression
-            struct ASTNode* true_expr;  // Expression if condition is true
-            struct ASTNode* false_expr; // Expression if condition is false
+            ASTNode* condition;
+            ASTNode* trueExpr;
+            ASTNode* falseExpr;
         } ternary;
         
-        // For struct definition (struct name { members })
+        // Function calls
         struct {
-            char* struct_name;          // Name of the struct type
-            StructInfo* info;           // Struct information
-            struct ASTNode* members;    // List of member declarations
-        } struct_def;
+            ASTNode* function;
+            ASTNode** arguments;
+            int argCount;
+        } call;
         
-        // For struct member access (expr.member or expr->member)
+        // Array access
         struct {
-            OperatorType op;            // OP_DOT or OP_ARROW
-            char* member_name;          // Name of the accessed member
-        } member_access;
-    };
-}ASTNode;
+            ASTNode* array;
+            ASTNode* index;
+        } arrayAccess;
+        
+        // Member access
+        struct {
+            ASTNode* object;
+            char* memberName;
+            int isPointer;  // -> vs .
+        } memberAccess;
+        
+        // Statements
+        struct {
+            ASTNode** statements;
+            int count;
+        } compound;
+        
+        struct {
+            ASTNode* condition;
+            ASTNode* thenStmt;
+            ASTNode* elseStmt;
+        } ifStmt;
+        
+        struct {
+            ASTNode* condition;
+            ASTNode* body;
+        } whileStmt;
+        
+        struct {
+            ASTNode* init;
+            ASTNode* condition;
+            ASTNode* update;
+            ASTNode* body;
+        } forStmt;
+        
+        struct {
+            ASTNode* expression;
+            ASTNode** cases;
+            int caseCount;
+        } switchStmt;
+        
+        struct {
+            ASTNode* value;
+            ASTNode* stmt;
+        } caseStmt;
+        
+        struct {
+            ASTNode* expression;
+        } returnStmt;
+        
+        // Declarations
+        struct {
+            char* name;
+            TypeInfo* type;
+            ASTNode* initializer;
+            StorageClass storageClass;
+        } varDecl;
+        
+        struct {
+            char* name;
+            TypeInfo* returnType;
+            struct Parameter** parameters;
+            int paramCount;
+            ASTNode* body;
+            StorageClass storageClass;
+            FunctionSpecifier specifiers;
+            // Attributes
+            int isNaked;
+            int isDeprecated;
+            char* deprecatedMessage;
+        } funcDecl;
+        
+        // Inline assembly
+        struct {
+            char* assembly;
+            char** outputConstraints;
+            char** inputConstraints;
+            char** clobbers;
+            // Operand names (identifiers) corresponding to constraints (best-effort parsing)
+            char** outputOperands;
+            char** inputOperands;
+            int isVolatile;
+            int outputCount;
+            int inputCount;
+            int clobberCount;
+        } inlineAsm;
+        
+        // Initializer lists
+        struct {
+            ASTNode** elements;
+            int count;
+        } initList;
+        
+        // Designated initializers
+        struct {
+            ASTNode** designators;  // .member or [index]
+            ASTNode* value;
+            int designatorCount;
+        } designatedInit;
+    } data;
+    
+    // Child nodes (for generic traversal)
+    ASTNode** children;
+    int childCount;
+};
 
-// Function to create a new AST node
-ASTNode* createNode(NodeType type);
+// Function parameter
+typedef struct Parameter {
+    char* name;
+    TypeInfo* type;
+} Parameter;
 
-// Function to print the AST for debugging
+// Function declarations
+ASTNode* createASTNode(ASTNodeType type);
+void freeASTNode(ASTNode* node);
 void printAST(ASTNode* node, int indent);
+ASTNode* copyASTNode(ASTNode* node);
 
-// Get the size of a data type in bytes
-int getTypeSize(DataType type);
+// Type system functions
+TypeInfo* createTypeInfo(DataType baseType);
+void freeTypeInfo(TypeInfo* type);
+TypeInfo* copyTypeInfo(TypeInfo* type);
+int getTypeSize(TypeInfo* type, int targetWidth);
+int getTypeAlignment(TypeInfo* type, int targetWidth);
+int areTypesCompatible(TypeInfo* type1, TypeInfo* type2);
+TypeInfo* getCommonType(TypeInfo* type1, TypeInfo* type2);
 
-char * strdupc (const char *s);
+// C99 specific type functions
+int isIntegerType(TypeInfo* type);
+int isFloatingType(TypeInfo* type);
+int isArithmeticType(TypeInfo* type);
+int isScalarType(TypeInfo* type);
+int isComplexType(TypeInfo* type);
+int isRealType(TypeInfo* type);
+
+// AST utility functions
+void addChild(ASTNode* parent, ASTNode* child);
+ASTNode* findNodeByType(ASTNode* root, ASTNodeType type);
+void visitAST(ASTNode* node, void (*visitor)(ASTNode*, void*), void* context);
+
+// AST cleanup
+void cleanupAST(ASTNode* root);
 
 #endif // AST_H

@@ -4,113 +4,214 @@
 #include "ast.h"
 #include "lexer.h"
 
-// Initialize parser
-void initParser();
+// Parser state
+typedef struct Parser {
+    Token currentToken;
+    Token lookaheadToken;
+    
+    // Parser options
+    struct {
+        unsigned int enableC99 : 1;
+        unsigned int enableGNU : 1;
+        unsigned int enableInlineAsm : 1;
+        unsigned int strictMode : 1;
+    } options;
+    
+    // Error handling
+    int errorCount;
+    int warningCount;
+    char* lastError;
+    
+    // Parse state
+    int panicMode;
+    int synchronizing;
+} Parser;
 
-// Parse a program
-ASTNode* parseProgram();
+// Operator precedence levels
+typedef enum {
+    PREC_NONE,
+    PREC_ASSIGNMENT,    // = += -= *= /=
+    PREC_TERNARY,       // ?:
+    PREC_OR,            // ||
+    PREC_AND,           // &&
+    PREC_BITWISE_OR,    // |
+    PREC_BITWISE_XOR,   // ^
+    PREC_BITWISE_AND,   // &
+    PREC_EQUALITY,      // == !=
+    PREC_COMPARISON,    // < > <= >=
+    PREC_SHIFT,         // << >>
+    PREC_TERM,          // + -
+    PREC_FACTOR,        // * / %
+    PREC_UNARY,         // ! ~ + - ++ -- & *
+    PREC_POSTFIX,       // [] () . ->
+    PREC_PRIMARY
+} Precedence;
 
-// Parse a declaration (variable or function)
-ASTNode* parseDeclaration();
+// Parse rule structure for Pratt parsing
+typedef struct ParseRule {
+    ASTNode* (*prefix)(void);
+    ASTNode* (*infix)(ASTNode* left);
+    Precedence precedence;
+} ParseRule;
 
-// Parse a function definition
-ASTNode* parseFunctionDefinition(char* name, TypeInfo returnType);
+// Function declarations
 
-// Parse a parameter
-ASTNode* parseParameter();
+// Parser initialization and cleanup
+void initParser(void);
+void cleanupParser(void);
+ASTNode* parseProgram(void);
 
-// Parse a variable declaration
-ASTNode* parseVariableDeclaration(char* name, TypeInfo typeInfo);
+// Top-level parsing
+ASTNode* parseTranslationUnit(void);
+ASTNode* parseExternalDeclaration(void);
 
-// Parse a block of statements
-ASTNode* parseBlock();
+// Declarations
+ASTNode* parseDeclaration(void);
+ASTNode* parseFunctionDeclaration(void);
+ASTNode* parseVariableDeclaration(void);
+ASTNode* parseStructDeclaration(void);
+ASTNode* parseUnionDeclaration(void);
+ASTNode* parseEnumDeclaration(void);
+ASTNode* parseTypedefDeclaration(void);
 
-// Parse a statement
-ASTNode* parseStatement();
+// C99 specific declarations
+ASTNode* parseInlineDeclaration(void);
+ASTNode* parseStaticAssert(void);
 
-// Parse an expression statement
-ASTNode* parseExpressionStatement();
+// Type parsing
+TypeInfo* parseTypeSpecifier(void);
+TypeInfo* parseDeclarationSpecifiers(void);
+TypeInfo* parseStorageClassSpecifier(void);
+TypeInfo* parseTypeQualifier(void);
+TypeInfo* parseFunctionSpecifier(void);
+TypeInfo* parsePointer(void);
+TypeInfo* parseDirectDeclarator(TypeInfo* baseType);
+TypeInfo* parseAbstractDeclarator(void);
 
-// Parse a return statement
-ASTNode* parseReturnStatement();
+// C99 type parsing
+TypeInfo* parseComplexType(void);
+TypeInfo* parseRestrictQualifier(void);
+TypeInfo* parseInlineSpecifier(void);
 
-// Parse a break statement
-ASTNode* parseBreakStatement();
+// Statements
+ASTNode* parseStatement(void);
+ASTNode* parseCompoundStatement(void);
+ASTNode* parseExpressionStatement(void);
+ASTNode* parseIfStatement(void);
+ASTNode* parseWhileStatement(void);
+ASTNode* parseDoWhileStatement(void);
+ASTNode* parseForStatement(void);
+ASTNode* parseSwitchStatement(void);
+ASTNode* parseCaseStatement(void);
+ASTNode* parseDefaultStatement(void);
+ASTNode* parseBreakStatement(void);
+ASTNode* parseContinueStatement(void);
+ASTNode* parseReturnStatement(void);
+ASTNode* parseGotoStatement(void);
+ASTNode* parseLabelStatement(void);
 
-// Parse a continue statement
-ASTNode* parseContinueStatement();
+// Expressions - Pratt parser
+ASTNode* parseExpression(void);
+ASTNode* parseExpressionWithPrecedence(Precedence precedence);
+ASTNode* parseAssignmentExpression(void);
+ASTNode* parseConditionalExpression(void);
+ASTNode* parseLogicalOrExpression(void);
+ASTNode* parseLogicalAndExpression(void);
+ASTNode* parseBitwiseOrExpression(void);
+ASTNode* parseBitwiseXorExpression(void);
+ASTNode* parseBitwiseAndExpression(void);
+ASTNode* parseEqualityExpression(void);
+ASTNode* parseRelationalExpression(void);
+ASTNode* parseShiftExpression(void);
+ASTNode* parseAdditiveExpression(void);
+ASTNode* parseMultiplicativeExpression(void);
+ASTNode* parseCastExpression(void);
+ASTNode* parseUnaryExpression(void);
+ASTNode* parsePostfixExpression(void);
+ASTNode* parsePrimaryExpression(void);
 
-// Parse a for statement
-ASTNode* parseForStatement();
+// C99 specific expressions
+ASTNode* parseCompoundLiteral(void);
+ASTNode* parseDesignatedInitializer(void);
+ASTNode* parseGenericSelection(void);
+ASTNode* parseAlignofExpression(void);
 
-// Parse a while statement
-ASTNode* parseWhileStatement();
+// Initializers
+ASTNode* parseInitializer(void);
+ASTNode* parseInitializerList(void);
+ASTNode* parseDesignation(void);
+ASTNode* parseDesignator(void);
 
-// Parse a do-while statement
-ASTNode* parseDoWhileStatement();
+// Inline assembly parsing
+ASTNode* parseInlineAssembly(void);
+ASTNode* parseSimpleInlineAsm(void);
+ASTNode* parseExtendedInlineAsm(void);
+ASTNode* parseAsmConstraints(void);
+ASTNode* parseAsmClobbers(void);
 
-// Parse an if statement
-ASTNode* parseIfStatement();
+// Attributes (GNU extensions)
+ASTNode* parseAttributes(void);
+ASTNode* parseAttribute(void);
+ASTNode* parseAttributeList(void);
 
-// Parse an inline assembly block
-ASTNode* parseAsmBlock();
+// Utility functions
+int match(TokenType type);
+int check(TokenType type);
+Token advance(void);
+int isAtEnd(void);
+Token peek(void);
+Token previous(void);
+void consume(TokenType type, const char* message);
 
-// Parse an expression
-ASTNode* parseExpression();
+// Error handling
+void parserError(int line, int column, const char* format, ...);
+void parserErrorAt(Token token, const char* message);
+void parserWarning(int line, int column, const char* format, ...);
+void synchronize(void);
+int hasParserErrors(void);
+const char* getLastParserError(void);
 
-// Parse a comma expression
-ASTNode* parseCommaExpression();
+// Parse rule table
+ParseRule* getParseRule(TokenType type);
+void initParseRules(void);
 
-// Parse an assignment expression
-ASTNode* parseAssignmentExpression();
+// Precedence utilities
+Precedence getPrecedence(TokenType type);
+BinaryOperator getTokenBinaryOperator(TokenType type);
+UnaryOperator getTokenUnaryOperator(TokenType type);
 
-// Parse a ternary conditional expression
-ASTNode* parseTernaryExpression();
+// Type utilities
+int isTypeToken(TokenType type);
+int isStorageClassToken(TokenType type);
+int isTypeQualifierToken(TokenType type);
+int isFunctionSpecifierToken(TokenType type);
 
-// Parse a logical OR expression
-ASTNode* parseLogicalOrExpression();
+// Declarator parsing helpers
+char* parseDeclaratorName(TypeInfo** type);
+ASTNode* parseParameterList(void);
+ASTNode* parseParameter(void);
 
-// Parse a logical AND expression
-ASTNode* parseLogicalAndExpression();
+// Expression utilities
+ASTNode* parseConstantExpression(void);
+long long evaluateConstantExpression(ASTNode* expr);
+int isConstantExpression(ASTNode* expr);
 
-// Parse a equality expression
-ASTNode* parseEqualityExpression();
+// C99 variadic function support
+int parseEllipsis(void);
+ASTNode* parseVaArg(void);
 
-// Parse a relational expression
-ASTNode* parseRelationalExpression();
+// Symbol table integration
+void enterScope(void);
+void exitScope(void);
+void declareVariable(const char* name, TypeInfo* type);
+void declareFunction(const char* name, TypeInfo* type);
 
-// Parse an additive expression
-ASTNode* parseAdditiveExpression();
+// Parser state management
+void saveParserState(void);
+void restoreParserState(void);
 
-// Parse a multiplicative expression
-ASTNode* parseMultiplicativeExpression();
-
-// Parse a unary expression
-ASTNode* parseUnaryExpression();
-
-// Parse a postfix expression
-ASTNode* parsePostfixExpression();
-
-// Parse a primary expression
-ASTNode* parsePrimaryExpression();
-
-// Parse a type
-TypeInfo parseType();
-
-// Expect a specific token type
-void expect(TokenType type);
-
-// Parse expressions with bitwise operators
-ASTNode* parseBitwiseExpression();
-
-// Parse expressions with shift operators
-ASTNode* parseShiftExpression();
-
-// Is a type name
-int isTypeName(Token token);
-
-// Token position functions for lookahead and backtracking
-int getCurrentPosition();
-void setPosition(int pos);
+// Debugging
+void printParserState(void);
+void dumpParseStack(void);
 
 #endif // PARSER_H
